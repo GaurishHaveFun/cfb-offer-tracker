@@ -1,0 +1,101 @@
+{
+  "player_offer": {
+    "text": "Blessed to receive an offer from Alabama! #AGTG @AlabamaFTBL",
+    "author": {
+      "handle": "jsmith_qb27",
+      "name": "John Smith",
+      "description": "QB | c/o 2027 | Westside HS | 6'2 195lbs | Atlanta, GA",
+      "location": "Atlanta, GA"
+    }
+  },
+  "reporter_commit": {
+    "text": "BREAKING: 2027 QB John Smith has committed to Ohio State!",
+    "author": {
+      "handle": "RecruitInsiderX",
+      "name": "Recruit Insider",
+      "description": "Recruiting analyst covering the Big Ten for On3. DMs open.",
+      "location": "Columbus, OH"
+    }
+  },
+  "coach_offer": {
+    "text": "Excited to offer this young man! Welcome to the family. #GoDucks",
+    "author": {
+      "handle": "CoachRivera",
+      "name": "Mike Rivera",
+      "description": "Recruiting Coordinator, Oregon Football. Husband, father.",
+      "location": "Eugene, OR"
+    }
+  },
+  "flip": {
+    "text": "🚨 COMMITTED 🚨 2026 ATH Marcus Lee flips to Texas from Oklahoma!",
+    "author": {
+      "handle": "TXRecruitingHQ",
+      "name": "Texas Recruiting HQ",
+      "description": "Rivals recruiting reporter | Texas Longhorns coverage",
+      "location": "Austin, TX"
+    }
+  },
+  "decommit": {
+    "text": "After a great talk with my family, I've decided to decommit from Clemson. Recruitment is reopening.",
+    "author": {
+      "handle": "de_lineman25",
+      "name": "Derrick Owens",
+      "description": "DL | Class of '25 | Norcross High School | GA",
+      "location": "Norcross, GA"
+    }
+  },
+  "multi_school_offer": {
+    "text": "Blessed to say I've received an offer from Bama and LSU! #AGTG",
+    "author": {
+      "handle": "speedy_wr26",
+      "name": "Tyler Banks",
+      "description": "WR/DB | c/o 2026 | 6-1 175lbs | Prep Academy",
+      "location": "Baton Rouge, LA"
+    }
+  },
+  "fan_speculation": {
+    "text": "I really think Georgia should offer this kid, he's a first round talent. Just my prediction though.",
+    "author": {
+      "handle": "randomfan99",
+      "name": "Dawgs Fan",
+      "description": "Georgia football fan account. Not affiliated with UGA.",
+      "location": "GA"
+    }
+  },
+  "same_event_player_side": {
+    "text": "100% committed to Michigan! Go Blue!",
+    "author": {
+      "handle": "big_dline44",
+      "name": "Andre Walker",
+      "description": "DL | c/o 2027 | East HS | 6'4 260lbs",
+      "location": "Detroit, MI"
+    }
+  },
+  "same_event_reporter_side": {
+    "text": "2027 DL Andre Walker (@big_dline44) has committed to Michigan! Big get for the Wolverines.",
+    "author": {
+      "handle": "MichRecruiting",
+      "name": "Michigan Recruiting Insider",
+      "description": "247Sports recruiting reporter covering Michigan recruiting.",
+      "location": "Ann Arbor, MI"
+    }
+  },
+  "noise_unclassified_author": {
+    "text": "Blessed to receive an offer from Alabama! #AGTG",
+    "author": {
+      "handle": "just_some_guy",
+      "name": "Some Guy",
+      "description": "Living life. Coffee enthusiast.",
+      "location": "Nowhere, USA"
+    }
+  },
+  "school_account_noise": {
+    "text": "Blessed to receive an offer from Alabama! #AGTG",
+    "author": {
+      "handle": "AlabamaFTBL",
+      "name": "Alabama Football",
+      "description": "The official page of Alabama Crimson Tide Football.",
+      "location": "Tuscaloosa, AL"
+    }
+  }
+}

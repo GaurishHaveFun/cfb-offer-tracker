@@ -1,0 +1,140 @@
+# 26 CFB programs (the original 15 blue-bloods plus 11 added later).
+# Handles for the 11 added schools were supplied by the user, not looked up
+# (no network access here) - @IUFootball, @GeorgiaStateFB and
+# @GSAthletics_FB are the least certain of the bunch and are flagged
+# "# verify" below; treat any of the eleven as worth a spot-check before
+# relying on handle-mention matching in production.
+# aliases: text/hashtag variants used in queries and school matching (name matching is case-insensitive).
+# handles: official team/program accounts (used to identify + exclude "official school account" noise).
+# coach_handles: known staff handles that count as a "coach" source even if the bio doesn't self-describe.
+schools:
+  - name: Alabama
+    aliases: ["Alabama", "Bama", "Roll Tide", "@AlabamaFTBL", "#RollTide"]
+    handles: ["AlabamaFTBL"]
+    coach_handles: []
+  - name: LSU
+    aliases: ["LSU", "Geaux Tigers", "@LSUfootball", "#GeauxTigers"]
+    handles: ["LSUfootball"]
+    coach_handles: []
+  - name: Ohio State
+    aliases: ["Ohio State", "OSU", "Buckeyes", "@OhioStateFB", "#GoBucks"]
+    handles: ["OhioStateFB"]
+    coach_handles: []
+  - name: Oregon
+    aliases: ["Oregon", "Ducks", "@oregonfootball", "#GoDucks"]
+    handles: ["oregonfootball"]
+    coach_handles: []
+  - name: Georgia
+    aliases: ["Georgia", "UGA", "Bulldogs", "@GeorgiaFootball", "#GoDawgs"]
+    handles: ["GeorgiaFootball"]
+    coach_handles: []
+  - name: Texas
+    aliases: ["Texas", "Longhorns", "@TexasFootball", "#HookEm"]
+    handles: ["TexasFootball"]
+    coach_handles: []
+  - name: Michigan
+    aliases: ["Michigan", "Wolverines", "@UMichFootball", "#GoBlue"]
+    handles: ["UMichFootball"]
+    coach_handles: []
+  - name: USC
+    aliases: ["USC", "Trojans", "@USC_Athletics", "@USCFB", "#FightOn"]
+    handles: ["USC_FB", "USCFB"]
+    coach_handles: []
+  - name: Notre Dame
+    aliases: ["Notre Dame", "Fighting Irish", "@NDFootball", "#GoIrish"]
+    handles: ["NDFootball"]
+    coach_handles: []
+  - name: Clemson
+    # "Tigers" deliberately excluded: it's shared with LSU ("Geaux Tigers"),
+    # Auburn, Mizzou, Memphis, etc. - too ambiguous to be a standalone alias
+    # (a reporter's "chose the Tigers over..." nickname wording elsewhere
+    # falsely resolved to Clemson before this was removed).
+    aliases: ["Clemson", "@ClemsonFB", "#AllIn"]
+    handles: ["ClemsonFB"]
+    coach_handles: []
+  - name: Penn State
+    aliases: ["Penn State", "Nittany Lions", "@PennStateFball", "#WeAre"]
+    handles: ["PennStateFball"]
+    coach_handles: []
+  - name: Florida
+    aliases: ["Florida", "Gators", "@GatorsFB", "#GoGators"]
+    handles: ["GatorsFB"]
+    coach_handles: []
+  - name: Oklahoma
+    aliases: ["Oklahoma", "Sooners", "@OU_Football", "#Sooners"]
+    handles: ["OU_Football"]
+    coach_handles: []
+  - name: Tennessee
+    aliases: ["Tennessee", "Vols", "@Vol_Football", "#GBO"]
+    handles: ["Vol_Football"]
+    coach_handles: []
+  - name: Texas A&M
+    aliases: ["Texas A&M", "Texas AM", "Aggies", "@AggieFootball", "#GigEm"]
+    handles: ["AggieFootball"]
+    coach_handles: []
+  - name: Indiana
+    # "IU" is too short/ambiguous to trust as a bare plain-text alias (it
+    # collides with all sorts of unrelated "IU" usage) - classify.py only
+    # accepts it when the tweet also has explicit football context (the
+    # word "football"/the emoji) or the official handle is mentioned. "IU
+    # Indianapolis" and "Indiana State" are rejected via SCHOOL_REJECT_SUFFIXES.
+    aliases: ["Indiana", "Hoosiers", "IU", "@IUFootball"]
+    handles: ["IUFootball"]  # verify
+    coach_handles: []
+  - name: Cincinnati
+    # "UC" deliberately excluded from aliases - too ambiguous (UC Berkeley,
+    # UC generically) even with football context; it's only reachable via
+    # the official @GoBearcatsFB handle mention.
+    aliases: ["Cincinnati", "Bearcats", "@GoBearcatsFB"]
+    handles: ["GoBearcatsFB"]
+    coach_handles: []
+  - name: Miami (FL)
+    # "Miami" alone is ambiguous with Miami University (Ohio, "RedHawks") -
+    # classify.py rejects it when the tweet also names Ohio/RedHawks/
+    # "Miami University" context, and treats "in Miami"/"Miami-area"/
+    # "Miami, FL" as a hometown location rather than the school.
+    aliases: ["Miami", "Miami (FL)", "The U", "Canes", "Hurricanes", "Go Canes", "@CanesFootball"]
+    handles: ["CanesFootball"]
+    coach_handles: []
+  - name: Texas Tech
+    aliases: ["Texas Tech", "Red Raiders", "@TexasTechFB"]
+    handles: ["TexasTechFB"]
+    coach_handles: []
+  - name: Florida State
+    aliases: ["Florida State", "FSU", "Seminoles", "#GoNoles", "@FSU_Football"]
+    handles: ["FSU_Football"]
+    coach_handles: []
+  - name: Georgia Tech
+    # Bare "GT" deliberately excluded - too short/ambiguous (40-times, car
+    # trims, etc.) to trust as a standalone alias.
+    aliases: ["Georgia Tech", "Yellow Jackets", "@GeorgiaTechFB"]
+    handles: ["GeorgiaTechFB"]  # verify
+    coach_handles: []
+  - name: Georgia State
+    # Bare "Panthers" deliberately excluded (shared with Pitt, FIU, etc.) -
+    # only the disambiguated "Georgia State Panthers" form is trusted.
+    aliases: ["Georgia State", "GSU", "Georgia State Panthers"]
+    handles: ["GeorgiaStateFB"]  # verify
+    coach_handles: []
+  - name: Virginia Tech
+    aliases: ["Virginia Tech", "Hokies", "@HokiesFB"]
+    handles: ["HokiesFB"]
+    coach_handles: []
+  - name: North Carolina
+    aliases: ["North Carolina", "UNC", "Tar Heels", "@UNCFootball"]
+    handles: ["UNCFootball"]
+    coach_handles: []
+  - name: South Florida
+    # "USF" is ambiguous with the University of San Francisco - classify.py
+    # only accepts it as a plain-text alias alongside explicit football
+    # context (or the official handle mention). Bare "Bulls" deliberately
+    # excluded (shared with Buffalo, SFA, etc.) - only "USF Bulls" is trusted.
+    aliases: ["South Florida", "USF", "USF Bulls", "@USFFootball"]
+    handles: ["USFFootball"]
+    coach_handles: []
+  - name: Georgia Southern
+    # Bare "Eagles" deliberately excluded (shared with BC, EMU, etc.) - only
+    # the disambiguated "Georgia Southern Eagles" form is trusted.
+    aliases: ["Georgia Southern", "Georgia Southern Eagles"]
+    handles: ["GSAthletics_FB"]  # verify
+    coach_handles: []

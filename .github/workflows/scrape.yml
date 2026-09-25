@@ -1,0 +1,114 @@
+name: Scrape CFB offers
+
+on:
+  schedule:
+    # Staggered off the top of the hour - GitHub delays jobs scheduled
+    # exactly on the hour when the queue is busy.
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      since_days:
+        description: "Override the lookback window in days (leave blank for the default sheet-based window, clamped to 3 days in CI)"
+        required: false
+        type: string
+      max_pages:
+        description: "Override the pages-per-query cap (leave blank for the default)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cfb-offers-scrape
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: pyproject.toml
+
+      - name: Verify required secrets are set
+        env:
+          X_COOKIES: ${{ secrets.X_COOKIES }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+        run: |
+          missing=()
+          [ -z "${X_COOKIES}" ] && missing+=("X_COOKIES")
+          [ -z "${GOOGLE_SERVICE_ACCOUNT_JSON}" ] && missing+=("GOOGLE_SERVICE_ACCOUNT_JSON")
+          [ -z "${SHEET_ID}" ] && missing+=("SHEET_ID")
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Missing required secret(s): ${missing[*]}. Set them with 'gh secret set <NAME>' - see docs/github-actions-setup.md."
+            exit 1
+          fi
+
+      - name: Mask derived secret values
+        env:
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          # SHEET_ID and the service account's client_email aren't registered
+          # as GitHub secrets themselves, but they're derived from secrets
+          # and could otherwise leak into error text/tracebacks - mask them
+          # explicitly.
+          echo "::add-mask::${SHEET_ID}"
+          client_email=$(python3 -c "
+          import json, os
+          try:
+              print(json.loads(os.environ['GOOGLE_SERVICE_ACCOUNT_JSON']).get('client_email', ''))
+          except Exception:
+              pass
+          ")
+          if [ -n "${client_email}" ]; then
+            echo "::add-mask::${client_email}"
+          fi
+
+      - name: Install package
+        run: pip install .
+
+      # No tweet text or player info is ever logged here - counts only
+      # (this repo is public). See src/cfb_offers/main.py, which prints
+      # only "appended=/updated=" and "tweets_seen=/.../events=" lines.
+      - name: Run scraper
+        env:
+          X_COOKIES: ${{ secrets.X_COOKIES }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          SINCE_DAYS: ${{ inputs.since_days }}
+          MAX_PAGES: ${{ inputs.max_pages }}
+        run: |
+          set -o pipefail
+          args=()
+          if [ -n "${SINCE_DAYS}" ]; then args+=(--since-days "${SINCE_DAYS}"); fi
+          if [ -n "${MAX_PAGES}" ]; then args+=(--max-pages "${MAX_PAGES}"); fi
+          # main.py's counts-only lines go to stdout (appended=/updated=)
+          # and stderr (tweets_seen=.../events=) - capture both, in order,
+          # for the job summary step below, without changing main.py.
+          python -m cfb_offers "${args[@]}" 2>&1 | tee scrape_output.txt
+
+      - name: Write job summary (counts only)
+        if: always()
+        run: |
+          {
+            echo "### CFB offer scrape"
+            echo
+            echo '```'
+            if [ -f scrape_output.txt ]; then
+              grep -E '^(appended=|tweets_seen=|since_days=.*clamped)' scrape_output.txt || echo "no counts line found in scraper output"
+            else
+              echo "scraper did not produce output (see job logs)"
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          rm -f scrape_output.txt

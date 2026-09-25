@@ -1,0 +1,21 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# secrets / local artifacts
+cookies.json
+service-account.json
+*service-account*.json
+sa.json
+accounts.db
+x_cookies.txt
+*.csv
+*.jsonl
+.env
+
+# editor / OS
+.DS_Store
+.idea/
+.vscode/
