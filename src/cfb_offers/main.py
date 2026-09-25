@@ -251,6 +251,12 @@ def _write_jsonl(path: str, rows: list[dict]) -> None:
             f.write(json.dumps(row) + "\n")
 
 
+def _append_jsonl(path: str, rows: list[dict]) -> None:
+    with open(path, "a") as f:
+        for row in rows:
+            f.write(json.dumps(row) + "\n")
+
+
 def _read_jsonl(path: str) -> list[dict]:
     rows = []
     with open(path) as f:
@@ -375,67 +381,84 @@ async def run(argv: list[str] | None = None) -> list[OfferRecord]:
     tweets_dropped_unclassified = 0
 
     # A tweet about e.g. an Alabama/LSU cross-rivalry story can surface from
-    # more than one packed query; dedupe by tweet id before classifying so
-    # it isn't processed (and counted) twice.
-    seen_tweets: dict[str, object] = {}
+    # more than one packed query; dedupe by tweet id so it isn't processed
+    # (and counted) twice.
+    seen_ids: set[str] = set()
+    appended_total = updated_total = 0
+    if args.dump_raw:
+        open(args.dump_raw, "w").close()  # truncate; rows are appended per query
+
+    # Process and save after every query rather than once at the end, so a
+    # crash, Ctrl+C, or sleep mid-backfill only loses the in-flight query.
     for query in build_all_queries(schools_cfg, since_days):
+        batch = []
         async for tweet in api.search(query, limit=limit):
             tweets_seen += 1
-            seen_tweets.setdefault(tweet.id_str, tweet)
-        await jitter()
+            if tweet.id_str not in seen_ids:
+                seen_ids.add(tweet.id_str)
+                batch.append(tweet)
 
-    dump_rows: list[dict] = []
+        batch_records: list[OfferRecord] = []
+        dump_rows: list[dict] = []
+        for tweet in batch:
+            author = tweet.user
+            handle = author.username
+            text = tweet.rawContent
+            # twscrape exposes @mentions as structured UserRefs (mentionedUsers)
+            # instead of making us regex-scan the tweet text for @handles.
+            mentions = [u.username for u in tweet.mentionedUsers]
 
-    for tweet in seen_tweets.values():
-        author = tweet.user
-        handle = author.username
-        text = tweet.rawContent
-        # twscrape exposes @mentions as structured UserRefs (mentionedUsers)
-        # instead of making us regex-scan the tweet text for @handles.
-        mentions = [u.username for u in tweet.mentionedUsers]
+            async def _resolve(h, n):
+                return await _resolve_player_profile(api, profile_cache, h, n)
 
-        async def _resolve(h, n):
-            return await _resolve_player_profile(api, profile_cache, h, n)
-
-        status, recs, player_profile = await process_tweet(
-            handle=handle,
-            text=text,
-            author_desc=author.rawDescription,
-            author_location=author.location,
-            author_displayname=author.displayname,
-            mentions=mentions,
-            tweet_id=tweet.id_str,
-            tweet_date=tweet.date.isoformat(),
-            tweet_url=f"https://x.com/{handle}/status/{tweet.id_str}",
-            schools_cfg=schools_cfg,
-            school_handles=school_handles,
-            resolve_profile=_resolve,
-        )
-        if status == "unclassified":
-            tweets_dropped_unclassified += 1
-        elif status == "noise":
-            tweets_dropped_noise += 1
-        records.extend(recs)
-
-        if args.dump_raw:
-            dump_rows.append(
-                {
-                    "id": tweet.id_str,
-                    "text": text,
-                    "date": tweet.date.isoformat(),
-                    "author": {
-                        "username": handle,
-                        "displayname": author.displayname,
-                        "rawDescription": author.rawDescription,
-                        "location": author.location,
-                    },
-                    "mentions": mentions,
-                    "player_profile": player_profile,
-                }
+            status, recs, player_profile = await process_tweet(
+                handle=handle,
+                text=text,
+                author_desc=author.rawDescription,
+                author_location=author.location,
+                author_displayname=author.displayname,
+                mentions=mentions,
+                tweet_id=tweet.id_str,
+                tweet_date=tweet.date.isoformat(),
+                tweet_url=f"https://x.com/{handle}/status/{tweet.id_str}",
+                schools_cfg=schools_cfg,
+                school_handles=school_handles,
+                resolve_profile=_resolve,
             )
+            if status == "unclassified":
+                tweets_dropped_unclassified += 1
+            elif status == "noise":
+                tweets_dropped_noise += 1
+            batch_records.extend(recs)
 
-    if args.dump_raw:
-        _write_jsonl(args.dump_raw, dump_rows)
+            if args.dump_raw:
+                dump_rows.append(
+                    {
+                        "id": tweet.id_str,
+                        "text": text,
+                        "date": tweet.date.isoformat(),
+                        "author": {
+                            "username": handle,
+                            "displayname": author.displayname,
+                            "rawDescription": author.rawDescription,
+                            "location": author.location,
+                        },
+                        "mentions": mentions,
+                        "player_profile": player_profile,
+                    }
+                )
+
+        if args.dump_raw and dump_rows:
+            _append_jsonl(args.dump_raw, dump_rows)
+        records.extend(batch_records)
+        # sync_records dedupes against rows already in the sheet (including
+        # ones written by earlier queries in this run), so per-query syncs
+        # never duplicate an event.
+        if ws is not None and batch_records:
+            appended, updated = sheets.sync_records(ws, dedupe_events(batch_records))
+            appended_total += appended
+            updated_total += updated
+        await jitter()
 
     # Stale cookies fail an individual request silently (twscrape just marks
     # the account inactive and moves on); catch that here so the Actions run
@@ -451,8 +474,7 @@ async def run(argv: list[str] | None = None) -> list[OfferRecord]:
             for r in records:
                 writer.writerow(r.as_row())
     else:
-        appended, updated = sheets.sync_records(ws, records)
-        print(f"appended={appended} updated={updated}")
+        print(f"appended={appended_total} updated={updated_total}")
 
     # counts only — never tweet text or player info (public repo / Actions log).
     print(
