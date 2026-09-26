@@ -25,7 +25,7 @@ from cfb_offers.config import School, env, load_schools
 from cfb_offers.dedupe import add_source, dedupe_events, make_event_key
 from cfb_offers.models import OfferRecord
 from cfb_offers.profile import parse_bio
-from cfb_offers.queries import build_all_queries
+from cfb_offers.queries import backfill_slices, build_all_queries, build_slice_queries
 
 BLANK_PROFILE = {
     "name": "", "handle": "", "class_year": "", "position": "", "height": "",
@@ -43,6 +43,23 @@ CI_MAX_SINCE_DAYS = 3
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Scrape X for CFB offer/commit/decommit tweets.")
     p.add_argument("--since-days", type=int, default=None, help="override the lookback window")
+    p.add_argument(
+        "--backfill-days",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "local long backfill: search the last N days one week at a time, paging each "
+            "week until it runs out (e.g. --backfill-days 90). Not allowed in CI"
+        ),
+    )
+    p.add_argument(
+        "--resume-from-slice",
+        type=int,
+        default=1,
+        metavar="K",
+        help="with --backfill-days: skip weeks before slice K (as printed in the progress lines)",
+    )
     p.add_argument(
         "--prune-sheet",
         metavar="RAW_JSONL",
@@ -281,6 +298,32 @@ def _read_jsonl(path: str) -> list[dict]:
     return rows
 
 
+# Pages per week-slice query in a --backfill-days run: high enough that a
+# week "runs out" long before the cap for all but the very busiest groups.
+SLICE_MAX_PAGES = 25
+
+
+def search_plan(
+    schools_cfg: list[School], since_days: int, backfill_days: int | None, resume_from_slice: int = 1
+) -> list[tuple[str, str]]:
+    """The (progress_label, query) list for a run. A normal run is one query
+    per school group over the whole window (no labels). A --backfill-days
+    run is every group once per week, newest week first, labelled with
+    counts/dates only, so it can be resumed with --resume-from-slice."""
+    if not backfill_days:
+        return [("", q) for q in build_all_queries(schools_cfg, since_days)]
+    slices = backfill_slices(backfill_days)
+    plan = []
+    for k, (since, until) in enumerate(slices, start=1):
+        if k < resume_from_slice:
+            continue
+        queries = build_slice_queries(schools_cfg, since, until)
+        for j, q in enumerate(queries, start=1):
+            label = f"slice {k}/{len(slices)} ({since}..{until}) query {j}/{len(queries)}"
+            plan.append((label, q))
+    return plan
+
+
 async def _replay(raw_tweets: list[dict], schools_cfg: list[School], school_handles: list[str]):
     """Runs saved tweets through process_tweet offline. Returns (records
     before dedupe, tweets_seen, noise_dropped, unclassified_dropped)."""
@@ -458,6 +501,8 @@ async def run(argv: list[str] | None = None) -> list[OfferRecord]:
 
     ws = None
     ci = is_ci()
+    if args.backfill_days and ci:
+        raise SystemExit("--backfill-days is for local runs only (it can take hours)")
     now = dt.datetime.now(dt.timezone.utc)
     if not args.dry_run:
         cookies_text = env("X_COOKIES", required=True)
@@ -486,8 +531,15 @@ async def run(argv: list[str] | None = None) -> list[OfferRecord]:
         else:
             since_days, is_backfill = 2, False
 
-    max_pages = resolve_max_pages(args.max_pages, is_backfill)
+    if args.backfill_days:
+        since_days, is_backfill = args.backfill_days, True
+    max_pages = (
+        args.max_pages or SLICE_MAX_PAGES
+        if args.backfill_days
+        else resolve_max_pages(args.max_pages, is_backfill)
+    )
     limit = search_limit(max_pages)
+    plan = search_plan(schools_cfg, since_days, args.backfill_days, args.resume_from_slice)
 
     api = await build_api(cookies_text)
     profile_cache: dict[str, dict] = {}
@@ -501,12 +553,14 @@ async def run(argv: list[str] | None = None) -> list[OfferRecord]:
     # (and counted) twice.
     seen_ids: set[str] = set()
     appended_total = updated_total = 0
-    if args.dump_raw:
+    if args.dump_raw and args.resume_from_slice <= 1:
         open(args.dump_raw, "w").close()  # truncate; rows are appended per query
 
     # Process and save after every query rather than once at the end, so a
     # crash, Ctrl+C, or sleep mid-backfill only loses the in-flight query.
-    for query in build_all_queries(schools_cfg, since_days):
+    for progress, query in plan:
+        if progress:
+            print(progress, file=sys.stderr, flush=True)
         batch = []
         async for tweet in api.search(query, limit=limit):
             tweets_seen += 1

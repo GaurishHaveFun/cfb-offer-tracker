@@ -82,23 +82,25 @@ Each line becomes its own pool account.
 
 ### One-time local backfill
 
-Run this once, locally, before the schedule takes over — it forces the
-30-day lookback window (with a larger per-query page cap, since it isn't
-time-capped like Actions) and writes straight to the real sheet:
+Run this once, locally, before the schedule takes over. It writes straight
+to the real sheet, saving after every search:
 
 ```
-X_COOKIES="$(cat x_cookies.txt)" \
-GOOGLE_SERVICE_ACCOUNT_JSON="$(cat service-account.json)" \
-SHEET_ID=... \
-  python -m cfb_offers --backfill
+X_COOKIES="$(cat x_cookies.txt)" GOOGLE_SERVICE_ACCOUNT_JSON="$(cat sa.json)" SHEET_ID=... \
+  python -m cfb_offers --backfill-days 90 --dump-raw backfill.jsonl
 ```
 
-This needs the same three secrets as Actions (`X_COOKIES`,
-`GOOGLE_SERVICE_ACCOUNT_JSON`, `SHEET_ID`), set locally rather than as
-GitHub secrets. `--backfill` is a no-op if the environment looks like a
-GitHub Actions runner (`GITHUB_ACTIONS=true`) — it always clamps to a
-short window there instead, so the 30-day sweep only ever runs on your
-machine.
+`--backfill-days N` searches the last N days **one week at a time**, paging
+each week until it runs out, so a busy recent week can't crowd older weeks
+out (a single long search stops after its page cap, which for busy schools
+covers only 2-3 weeks). Expect a few hundred requests - hours, not minutes,
+with one or two accounts; add accounts to `X_COOKIES` to speed it up.
+
+Progress is printed as `slice K/13 (dates) query J/14`. If it stops, rerun
+with `--resume-from-slice K` to skip the weeks already done (rows already in
+the sheet are never duplicated, and `--dump-raw` is appended to instead of
+restarted). The older `--backfill` flag still does a single 30-day search per
+group. Neither runs in GitHub Actions, which always uses a short window.
 
 ### Expected rate limits
 

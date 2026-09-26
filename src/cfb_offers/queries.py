@@ -93,8 +93,12 @@ def _query_for_group(
     """The base query, with as many NEGATIVE_SPORT_TERMS appended as still
     fit within max_len (there isn't always room for all of them once a
     group's aliases eat into the budget - see module docstring)."""
-    prefix = f"{PHRASE_CLAUSE} {_alias_clause(schools)}"
-    suffix = _min_suffix(since_days)
+    return _with_negatives(
+        f"{PHRASE_CLAUSE} {_alias_clause(schools)}", _min_suffix(since_days), max_len
+    )
+
+
+def _with_negatives(prefix: str, suffix: str, max_len: int = MAX_QUERY_LEN) -> str:
     fitted: list[str] = []
     for term in NEGATIVE_SPORT_TERMS:
         candidate = fitted + [term]
@@ -140,3 +144,30 @@ def build_all_queries(schools: list[School], since_days: int) -> list[str]:
     from which query found it.
     """
     return [_query_for_group(group, since_days) for group in group_schools(schools, since_days)]
+
+
+# " until:YYYY-MM-DD" - the extra room a date-sliced query needs.
+_UNTIL_LEN = len(" until:2026-01-01")
+
+
+def backfill_slices(days: int, slice_days: int = 7, today: date | None = None) -> list[tuple[date, date]]:
+    """Splits the last `days` days into (since, until) windows of `slice_days`,
+    newest first. X's `until:` is exclusive, so windows don't overlap."""
+    end = (today or date.today()) + timedelta(days=1)  # include today
+    start = end - timedelta(days=days)
+    slices = []
+    until = end
+    while until > start:
+        since = max(start, until - timedelta(days=slice_days))
+        slices.append((since, until))
+        until = since
+    return slices
+
+
+def build_slice_queries(schools: list[School], since: date, until: date) -> list[str]:
+    """The same school groups as build_all_queries, bounded to one date
+    window with since:/until:, so a busy recent week can't crowd older weeks
+    out of a long backfill."""
+    suffix = f"-filter:retweets since:{since.isoformat()} until:{until.isoformat()}"
+    groups = group_schools(schools, 0, max_len=MAX_QUERY_LEN - _UNTIL_LEN)
+    return [_with_negatives(f"{PHRASE_CLAUSE} {_alias_clause(g)}", suffix) for g in groups]
