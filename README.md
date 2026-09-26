@@ -114,6 +114,23 @@ long enough that you should expect at least one rate-limit wait unless you
 add more than one cookie line to `X_COOKIES` — each additional account
 gives twscrape somewhere else to rotate to instead of waiting.
 
+### Position and "7 states" tabs
+
+`offers` is the main tab the scraper writes to. To add read-only views of
+it, run once:
+
+```
+GOOGLE_SERVICE_ACCOUNT_JSON="$(cat sa.json)" SHEET_ID=... python -m cfb_offers --setup-tabs
+```
+
+This creates one tab per position group (QB, RB, WR, TE, OL, DL, LB, DB, ATH,
+K/P), a `Blank` tab for rows with no position, and a `7 states` tab for
+players from GA, NC, SC, TN, AL, FL and VA. Each is a live `FILTER` formula
+over `offers`, so it updates instantly as rows are added or pruned. A player
+listing several positions (e.g. `WR/DB`) appears on each matching tab. Don't
+edit these tabs by hand; edit `offers` instead. Re-running `--setup-tabs` is
+safe.
+
 ### Cleaning up the sheet after a rule change
 
 Rows already in the sheet aren't re-checked when the filters improve. To

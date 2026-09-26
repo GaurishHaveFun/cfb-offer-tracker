@@ -44,6 +44,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Scrape X for CFB offer/commit/decommit tweets.")
     p.add_argument("--since-days", type=int, default=None, help="override the lookback window")
     p.add_argument(
+        "--setup-tabs",
+        action="store_true",
+        help="create/refresh the read-only position, Blank and '7 states' tabs (live filters over 'offers')",
+    )
+    p.add_argument(
         "--backfill-days",
         type=int,
         default=None,
@@ -486,6 +491,13 @@ async def _run_from_raw(args: argparse.Namespace) -> list[OfferRecord]:
 
 async def run(argv: list[str] | None = None) -> list[OfferRecord]:
     args = parse_args(argv)
+    if args.setup_tabs:
+        ws = sheets.open_sheet(
+            env("GOOGLE_SERVICE_ACCOUNT_JSON", required=True), env("SHEET_ID", required=True)
+        )
+        titles = sheets.setup_view_tabs(ws)
+        print(f"setup_tabs: {len(titles)} tabs ready: {', '.join(titles)}")
+        return []
     if args.check_sheet:
         sa_json = env("GOOGLE_SERVICE_ACCOUNT_JSON", required=True)
         sheet_id = env("SHEET_ID", required=True)

@@ -253,6 +253,77 @@ def move_to_pruned(
     _with_retry(ws.spreadsheet.batch_update, {"requests": requests})
 
 
+# --- read-only view tabs ------------------------------------------------------
+# Each view tab is a live FILTER() formula over the offers tab, so it updates
+# the moment offers changes (new rows, pruning) with no extra writes from the
+# scraper. A player listing several positions ("WR/DB") appears on each
+# matching group's tab.
+POSITION_GROUPS: dict[str, list[str]] = {
+    "QB": ["QB"],
+    "RB": ["RB"],
+    "WR": ["WR"],
+    "TE": ["TE"],
+    "OL": ["OL", "OT", "OG", "IOL", "C"],
+    "DL": ["DL", "DE", "DT", "EDGE"],
+    "LB": ["LB"],
+    "DB": ["DB", "CB", "S"],
+    "ATH": ["ATH"],
+    "K/P": ["K", "P"],
+}
+BLANK_POSITION_TAB = "Blank"
+SEVEN_STATES_TAB = "7 states"
+# GA, the Carolinas, TN, AL, FL and VA.
+SEVEN_STATES = ["GA", "NC", "SC", "TN", "AL", "FL", "VA"]
+
+
+def _col(name: str) -> str:
+    return gspread.utils.rowcol_to_a1(1, HEADER.index(name) + 1).rstrip("1")
+
+
+def view_tab_formulas() -> dict[str, str]:
+    """{tab title: formula for cell A2} for every view tab (row 1 holds a
+    header formula). Pure, so it's testable without a sheet."""
+    src = f"'{WORKSHEET_NAME}'"
+    last = _col(HEADER[-1])
+    data = f"{src}!A2:{last}"
+    pos = f"{src}!{_col('position')}2:{_col('position')}"
+    state = f"{src}!{_col('state')}2:{_col('state')}"
+    key = f"{src}!A2:A"
+
+    def token_match(codes: list[str]) -> str:
+        # whole tokens of a "/"-separated list: "OT/OG" matches OL, "C/PF" can't
+        return f'REGEXMATCH(UPPER({pos}), "(^|[/ ,])({"|".join(codes)})($|[/ ,])")'
+
+    formulas = {tab: f'=IFERROR(FILTER({data}, {token_match(codes)}), "")' for tab, codes in POSITION_GROUPS.items()}
+    formulas[BLANK_POSITION_TAB] = f'=IFERROR(FILTER({data}, {key}<>"", {pos}=""), "")'
+    formulas[SEVEN_STATES_TAB] = (
+        f'=IFERROR(FILTER({data}, REGEXMATCH(UPPER({state}), "^({"|".join(SEVEN_STATES)})$")), "")'
+    )
+    return formulas
+
+
+def setup_view_tabs(ws: gspread.Worksheet) -> list[str]:
+    """Creates (or refreshes) every view tab. Safe to re-run. Returns the
+    tab titles."""
+    sh = ws.spreadsheet
+    header_formula = f"={{'{WORKSHEET_NAME}'!A1:{_col(HEADER[-1])}1}}"
+    titles = []
+    for title, formula in view_tab_formulas().items():
+        try:
+            tab = _with_retry(sh.worksheet, title)
+        except WorksheetNotFound:
+            tab = _with_retry(sh.add_worksheet, title=title, rows=1000, cols=len(HEADER))
+        _with_retry(
+            tab.update,
+            [[header_formula], [formula]],
+            "A1:A2",
+            value_input_option="USER_ENTERED",
+        )
+        _with_retry(tab.freeze, rows=1)
+        titles.append(title)
+    return titles
+
+
 def check_sheet(service_account_json: str, sheet_id: str) -> None:
     """Diagnostic for `python -m cfb_offers --check-sheet`: verifies the
     service account can authenticate, open the sheet, and read/write it, and
