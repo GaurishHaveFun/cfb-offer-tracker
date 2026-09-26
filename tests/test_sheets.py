@@ -111,6 +111,15 @@ class FakeWorksheet:
             self.rows[row_idx][col_idx - 1] = item["values"][0][0]
         return {}
 
+    def update(self, values, rng="A1", value_input_option=None):
+        assert rng == "A1"
+        for i, v in enumerate(values):
+            if i < len(self.rows):
+                self.rows[i] = list(v)
+            else:
+                self.rows.append(list(v))
+        return {}
+
     def delete_rows(self, start_index, end_index=None):
         self._maybe_fail("delete_rows")
         self.delete_rows_calls.append(start_index)
@@ -321,3 +330,16 @@ def test_check_sheet_passes_and_prints_counts(monkeypatch, capsys):
     # the test row was appended then deleted again
     assert not any(row and row[0] == "__check_sheet_test__" for row in ws.rows)
     assert ws.delete_rows_calls
+
+
+def test_blank_header_cell_is_restored_not_fatal():
+    blanked = [""] + sheets.HEADER[1:]
+    ws = FakeWorksheet(rows=[blanked, ["k1"] + [""] * (len(sheets.HEADER) - 1)])
+    sheets._ensure_header(ws)
+    assert ws.rows[0] == sheets.HEADER
+    assert ws.rows[1][0] == "k1"  # data untouched
+
+
+def test_existing_keys_are_found_even_if_header_is_blanked_mid_run():
+    ws = FakeWorksheet(rows=[[""] + sheets.HEADER[1:], ["k1"], ["k2"]])
+    assert sheets.load_existing_event_keys(ws) == {"k1": 2, "k2": 3}

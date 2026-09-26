@@ -8,6 +8,7 @@ written with value_input_option='RAW' so a tweet starting with '=', '+', or
 from __future__ import annotations
 
 import json
+import sys
 import time
 
 import gspread
@@ -84,6 +85,12 @@ def _open_worksheet(gc: gspread.Client, sheet_id: str, sa_email: str) -> gspread
     return ws
 
 
+def _only_blanked(found: list[str]) -> bool:
+    """True if `found` is the expected header with some cells emptied."""
+    found = found + [""] * (len(HEADER) - len(found))
+    return len(found) == len(HEADER) and all(f in ("", h) for f, h in zip(found, HEADER))
+
+
 def _ensure_header(ws: gspread.Worksheet) -> None:
     """Creates the header row if the worksheet is empty; otherwise verifies
     the existing header row matches OfferRecord's schema exactly, raising
@@ -96,6 +103,12 @@ def _ensure_header(ws: gspread.Worksheet) -> None:
         return
 
     existing_header = values[0]
+    if existing_header != HEADER and _only_blanked(existing_header):
+        # Someone cleared a header cell (e.g. A1) by hand; every other cell
+        # still matches, so it's safe to put the header back.
+        print("warning: restored blank header cell(s) in the offers tab", file=sys.stderr)
+        _with_retry(ws.update, [HEADER], "A1", value_input_option="RAW")
+        existing_header = HEADER
     if existing_header != HEADER:
         raise SheetSchemaError(
             "sheet header does not match the OfferRecord schema.\n"
@@ -124,8 +137,7 @@ def load_existing_event_keys(ws: gspread.Worksheet) -> dict[str, int]:
     values = _with_retry(ws.get_all_values)
     if not values:
         return {}
-    header = values[0]
-    key_col = header.index("event_key")
+    key_col = HEADER.index("event_key")
     out = {}
     for i, row in enumerate(values[1:], start=2):
         if key_col < len(row) and row[key_col]:
@@ -137,8 +149,7 @@ def latest_tweet_date(ws: gspread.Worksheet) -> str | None:
     values = _with_retry(ws.get_all_values)
     if len(values) <= 1:
         return None
-    header = values[0]
-    date_col = header.index("tweet_date")
+    date_col = HEADER.index("tweet_date")
     dates = [row[date_col] for row in values[1:] if date_col < len(row) and row[date_col]]
     return max(dates) if dates else None
 
@@ -148,9 +159,8 @@ def sync_records(ws: gspread.Worksheet, records: list[OfferRecord]) -> tuple[int
     for events that already exist. Returns (appended_count, updated_count).
     """
     existing = load_existing_event_keys(ws)
-    header = ws.row_values(1)
-    also_col_idx = header.index("also_reported_by") + 1  # gspread cols are 1-indexed
-    source_handle_col_idx = header.index("source_handle")
+    also_col_idx = HEADER.index("also_reported_by") + 1  # gspread cols are 1-indexed
+    source_handle_col_idx = HEADER.index("source_handle")
 
     to_append = []
     also_updates: list[dict] = []  # {"range": "H5", "values": [["a, b"]]}
@@ -189,11 +199,10 @@ def read_rows(ws: gspread.Worksheet) -> list[tuple[int, dict[str, str]]]:
     values = _with_retry(ws.get_all_values)
     if len(values) <= 1:
         return []
-    header = values[0]
     out = []
     for i, row in enumerate(values[1:], start=2):
-        row = row + [""] * (len(header) - len(row))
-        out.append((i, dict(zip(header, row))))
+        row = row + [""] * (len(HEADER) - len(row))
+        out.append((i, dict(zip(HEADER, row))))
     return out
 
 
