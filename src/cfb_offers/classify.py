@@ -57,6 +57,10 @@ NOISE_PATTERNS = [
     r"\bprediction\b",
     r"crystal\s+ball",
     r"if\s+he\s+commits",
+    # Hypothetical / third-person speculation about a future offer ("he might
+    # be able to get an offer from a bigger brand", "hoping to get an offer").
+    r"\b(?:might|could|would|will|may|should|hope|hopes|hoping|going|gonna|wants?)"
+    r"(?:\s+(?:be\s+able|like))?\s+(?:to\s+)?(?:get|earn|land|pick\s+up)\s+an?\s+offer",
     # Reporter roundup / preview posts name multiple prospects but announce
     # nothing - never worth a row.
     r"visitor\s+list",
@@ -78,6 +82,7 @@ INVITE_PATTERNS = [
     r"camp\s+invite",
     r"junior\s+day\s+invite",
     r"visit\s+invite",
+    r"(?:un)?official\s+visit",
 ]
 HARD_OFFER_PATTERNS = [
     r"offer\s+from",
@@ -87,6 +92,10 @@ HARD_OFFER_PATTERNS = [
     r"extended\s+an\s+offer",
     r"new\s+offer",
 ]
+
+# "blessed to receive" also precedes awards, visits, etc. - an offer event
+# needs the word itself (incl. the "🅾️ffer" emoji spelling).
+OFFER_WORD_RE = re.compile(r"offer|\U0001F17E\ufe0f?ffer", re.IGNORECASE)
 
 FLIP_RE = re.compile(
     r"flips?\s+to\s+(?P<to>[^.,!\n]+?)(?:\s+from\s+(?P<from>[^.,!\n]+))?(?:[.,!\n]|$)",
@@ -107,7 +116,7 @@ CHOSE_OVER_RE = re.compile(r"\bchose\s+(?P<to>.+?)\s+over\s+.+", re.IGNORECASE |
 # a single list rather than scattered per-school special cases.
 SCHOOL_REJECT_PREFIXES = [
     "West", "North", "South", "East",
-    "Western", "Eastern", "Northern", "Southern", "Central",
+    "Western", "Eastern", "Northern", "Southern", "Central", "Middle",
 ]
 SCHOOL_REJECT_SUFFIXES = [
     "State", "A&M", "Tech", "Southern", "Christian", "Baptist", "of Maryland",
@@ -119,6 +128,8 @@ SCHOOL_REJECT_SUFFIXES = [
     # way "Texas A&M" already rejects plain "Texas".
     "A&T", "Central", "Charlotte", "Pembroke", "Wilmington", "Atlantic",
     "International", "Commerce", "Indianapolis",
+    # "Tennessee Valley" (a semi-pro/JUCO-level program), not Tennessee.
+    "Valley",
 ]
 
 # --- non-football sport signals ---------------------------------------------
@@ -129,6 +140,9 @@ OFF_SPORT_WORD_RE = re.compile(
     r"\b(basketball|hoops|baseball|softball|volleyball|gymnastics|soccer|"
     r"track|wrestling|lacrosse|golf|tennis|swimming)\b",
     re.IGNORECASE,
+)
+OFF_SPORT_HANDLE_RE = re.compile(
+    r"@\w*(?:basketball|baseball|softball|volleyball|hoops|soccer|wbb|mbb)\w*", re.IGNORECASE
 )
 OFF_SPORT_ABBR_RE = re.compile(r"\b(?:WBB|MBB|RHP|LHP|INF|OF|PG|SG)\b|C/PF")
 
@@ -176,7 +190,7 @@ def detect_event_type(text: str) -> tuple[str | None, bool]:
         return "decommit", False
     if _search_any(COMMIT_PATTERNS, text):
         return "commit", bool(re.search(r"flip", text, re.IGNORECASE))
-    if _search_any(OFFER_PATTERNS, text):
+    if _search_any(OFFER_PATTERNS, text) and OFFER_WORD_RE.search(text):
         return "offer", False
     return None, False
 
@@ -184,7 +198,11 @@ def detect_event_type(text: str) -> tuple[str | None, bool]:
 def has_off_topic_sport(text: str) -> bool:
     """True if `text` clearly points to a non-football sport."""
     text = text or ""
-    return bool(OFF_SPORT_WORD_RE.search(text) or OFF_SPORT_ABBR_RE.search(text))
+    return bool(
+        OFF_SPORT_WORD_RE.search(text)
+        or OFF_SPORT_ABBR_RE.search(text)
+        or OFF_SPORT_HANDLE_RE.search(text)
+    )
 
 
 def has_football_signal(text: str, bio: str, schools: list[School]) -> bool:
@@ -391,11 +409,25 @@ def match_schools(text: str, schools: list[School]) -> list[str]:
     return matched
 
 
+# "committed to X" / "commits to X" / "my commitment to X": X is what was
+# committed to - which may not be a school at all ("commits to the Navy
+# All-American Bowl", "commitment to a clear RB1", "commits to the Wildcats").
+DIRECTED_COMMIT_RE = re.compile(r"\b(?:committed|commits?|commitment|committing)\s+to\b", re.IGNORECASE)
+COMMIT_WINDOW_AFTER = 120
+
+
 def _commit_school_text(text: str) -> str:
-    """For "chose X over A, B, C" wording, only X is the committing school -
-    the "over" list must not be scanned for school matches."""
+    """The part of the tweet that names the committing school.
+
+    For "chose X over A, B, C" wording, only X counts - the "over" list must
+    not be scanned. For "committed to X" wording, only the text right after
+    the phrase counts. Otherwise (#Committed, "100% committed") the whole
+    tweet is used."""
     m = CHOSE_OVER_RE.search(text)
-    return m.group("to") if m else text
+    if m:
+        return m.group("to")
+    windows = [text[m.end(): m.end() + COMMIT_WINDOW_AFTER] for m in DIRECTED_COMMIT_RE.finditer(text)]
+    return "\n".join(windows) if windows else text
 
 
 def flip_schools(text: str, schools: list[School]) -> tuple[str | None, str | None]:
@@ -409,6 +441,41 @@ def flip_schools(text: str, schools: list[School]) -> tuple[str | None, str | No
         to_school[0] if to_school else None,
         from_school[0] if from_school else None,
     )
+
+
+# How far around an offer phrase a school may be named and still count as
+# the offering school: "Alabama offered" (school before) and "blessed to
+# receive my 18th offer from The University Of Tennessee" (school after).
+OFFER_WINDOW_BEFORE = 40
+OFFER_WINDOW_AFTER = 90
+OFFER_LIST_RE = re.compile(
+    r"\b(?:also\s+)?holds?\s+(?:\w+\s+)?offers?|other\s+offers|offers\s+(?:from|include)", re.IGNORECASE
+)
+
+
+def offer_windows(text: str) -> str:
+    """The text surrounding every offer-phrase match, joined."""
+    spans = []
+    for p in OFFER_PATTERNS:
+        for m in re.finditer(p, text, re.IGNORECASE):
+            after = text[m.end(): m.end() + OFFER_WINDOW_AFTER]
+            # "...reports an offer from Washington. Also holds offers from
+            # Oregon, ..." - schools in the existing-offers list aren't new.
+            cut = OFFER_LIST_RE.search(after)
+            if cut:
+                after = after[: cut.start()]
+            spans.append(text[max(0, m.start() - OFFER_WINDOW_BEFORE): m.end()] + after)
+    return "\n".join(spans)
+
+
+def _school_named_in(school_name: str, window: str, schools: list[School]) -> bool:
+    """True if any alias or handle of `school_name` appears in `window`.
+    match_schools() already decided the school is genuinely named in the
+    tweet (with all its look-alike/context rules); this only checks where."""
+    school = next(s for s in schools if s.name == school_name)
+    terms = [*school.aliases, *school.handles]
+    low = window.lower()
+    return any(t.lstrip("@").lower() in low for t in terms if t)
 
 
 def classify_tweet(text: str, schools: list[School], bio: str = "") -> list[ClassifiedEvent]:
@@ -429,8 +496,15 @@ def classify_tweet(text: str, schools: list[School], bio: str = "") -> list[Clas
         return []
 
     if event_type == "offer":
-        # A tweet naming several schools gets one row per school.
-        return [ClassifiedEvent("offer", False, school) for school in match_schools(text, schools)]
+        # A tweet naming several schools gets one row per school - but only
+        # schools named near the offer wording itself, so "a job at LSU ...
+        # an offer from a bigger brand" doesn't credit LSU with an offer.
+        near = offer_windows(text)
+        return [
+            ClassifiedEvent("offer", False, school)
+            for school in match_schools(text, schools)
+            if _school_named_in(school, near, schools)
+        ]
 
     if event_type == "commit":
         if is_flip:

@@ -11,7 +11,9 @@ from cfb_offers.models import OfferRecord
 
 
 def normalize_name(name: str) -> str:
-    return re.sub(r"\s+", " ", (name or "").strip().lower())
+    # Drop a quoted nickname so 'Kavarris "Duke" Duncan' == 'Kavarris Duncan'.
+    name = re.sub(r'["\u201c][^"\u201c\u201d]*["\u201d]', " ", name or "")
+    return re.sub(r"\s+", " ", name.strip().lower())
 
 
 def make_event_key(player_handle: str, player_name: str, school: str, event_type: str) -> str:

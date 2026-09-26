@@ -288,7 +288,12 @@ async def _run_from_raw(args: argparse.Namespace) -> list[OfferRecord]:
         recorded_profile = rt.get("player_profile")
 
         async def _offline_resolve(handle, name, _recorded=recorded_profile):
-            return _recorded or {**BLANK_PROFILE, "name": name, "handle": handle}
+            # Reuse the looked-up profile only if the (possibly re-tuned)
+            # resolution still picks the same account; otherwise the replay
+            # would silently keep the old player choice.
+            if _recorded and handle and _recorded.get("handle", "").lower() == handle.lower():
+                return _recorded
+            return {**BLANK_PROFILE, "name": name, "handle": handle}
 
         status, recs, _ = await process_tweet(
             handle=author.get("username", ""),

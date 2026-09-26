@@ -29,7 +29,8 @@ def test_resolve_player_mention_from_at_mention(tweets):
     t = tweets["same_event_reporter_side"]
     mention = resolve_player_mention(t["text"], ["big_dline44"], exclude_handles=["MichRecruiting"])
     assert mention.handle == "big_dline44"
-    assert mention.name == ""
+    # The name is kept alongside the tagged handle when the text names the player.
+    assert mention.name == "Andre Walker"
 
 
 def test_resolve_player_mention_falls_back_to_name_parsing(tweets):

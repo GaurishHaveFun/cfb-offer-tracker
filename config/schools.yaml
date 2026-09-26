@@ -17,7 +17,7 @@ schools:
     handles: ["LSUfootball"]
     coach_handles: []
   - name: Ohio State
-    aliases: ["Ohio State", "OSU", "Buckeyes", "@OhioStateFB", "#GoBucks"]
+    aliases: ["Ohio State", "Buckeyes", "@OhioStateFB", "#GoBucks"]  # no bare "OSU": also Oklahoma/Oregon State
     handles: ["OhioStateFB"]
     coach_handles: []
   - name: Oregon

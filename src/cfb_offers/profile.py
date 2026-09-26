@@ -48,6 +48,10 @@ CLASS_YEAR_RE = re.compile(
     rf"c/?o\s*(?P<short3>2[6-9]|30)\b|"
     rf"class\s+of\s*[{_APOS}]?(?:(?P<full2>20(?:2[6-9]|30))|(?P<short2>2[6-9]|30))|"
     rf"[{_APOS}](?P<short1>2[6-9]|30)\b|"
+    # "28'" / "28’" - year first, apostrophe after, glued to the next token
+    # ("5⭐️ 28’RIVALS", "/28’/WR"). A trailing space ("UCF 26' |") is left
+    # alone: that's usually a college graduation year, not a recruit's class.
+    rf"(?<![\d.])(?P<short4>2[6-9]|30)[{_APOS}](?=[A-Za-z/|])|"
     r"\b(?P<full3>20(?:2[6-9]|30))\b",
     re.IGNORECASE,
 )
@@ -91,7 +95,7 @@ def parse_class_year(text: str) -> str:
     for key in ("full1", "full2", "full3"):
         if m.group(key):
             return m.group(key)
-    for key in ("short1", "short2", "short3"):
+    for key in ("short1", "short2", "short3", "short4"):
         if m.group(key):
             return f"20{m.group(key)}"
     return ""

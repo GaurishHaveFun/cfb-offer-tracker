@@ -104,9 +104,12 @@ def classify_author(bio: str, schools: list[School] | None = None, text: str = "
         return "player"
     if parse_position(bio) and RECRUIT_CONTEXT_RE.search(bio):
         return "player"
+    if overridable:
+        # "Blessed to receive an offer" is the player's own voice - reporters
+        # don't write that way - even when a ranking in the bio ("ESPN 300",
+        # "RIVALS #1 WR") and an unparsed class year leave no other signal.
+        return "player"
     if is_reporter_bio:
-        # Overridable, but no player signal in the bio to confirm it - fall
-        # back to the original reporter classification rather than dropping.
         return "reporter"
     if TEXT_REPORTER_RE.search(text):
         return "reporter"
@@ -138,8 +141,24 @@ NAME_BEFORE_VERB_RE = re.compile(
     r"(?:^|[.•\U0001F6A8\s])"  # start, bullet, or emoji/space boundary
     r"(?:20\d{2}\s+)?"  # optional leading class year
     r"(?:[A-Z]{1,4}/?[A-Z]{0,4}\s+)?"  # optional position(s)
-    r"(?P<name>[A-Z][a-zA-Z'.-]+\s+[A-Z][a-zA-Z'.-]+)\s+"
-    r"(?:has\s+)?(?:committed|commits|decommitted|de-commits?|flips?|has\s+received|received)"
+    # First and last name, optionally with a quoted nickname between them
+    # ('Kavarris "Duke" Duncan').
+    r"(?P<name>[A-Z][a-zA-Z'.-]+(?:\s+[\"\u201c][^\"\u201c\u201d]+[\"\u201d])?\s+[A-Z][a-zA-Z'.-]+"
+    r"(?:\s+(?:Jr\.?|Sr\.?|II|III|IV))?)\s+"
+    r"(?:\(\s*@\w+\s*\)\s+)?"  # optional "(@handle)" tag right after the name
+    # Verbs are case-insensitive: reporters write "has Committed"/"has Flipped".
+    r"(?i:(?:has\s+)?(?:committed|commits|decommitted|de-commits?|flips?|flipped|"
+    r"has\s+received|received|went\s+from|earned|picked\s+up|visited))"
+)
+
+# Handles that are outlets or recruiting offices, never a player
+# (@Horns247, @BOL_On3, @TexasRecruiting, @TPGNETWORK, ...).
+OUTLET_HANDLE_RE = re.compile(r"247|on3|rivals|espn|recruiting|network|sports|media|news|insider", re.IGNORECASE)
+
+# Mentions that credit the reporter/outlet rather than name the player:
+# "he tells me for @Rivals", "More from @OliviaKSayer", "via @BOL_On3".
+CREDIT_MENTION_RE = re.compile(
+    r"(?:\bfor|\bvia|\bfrom|\bper|\bh/t|\bcc:?|\bw/|\bon|\bby)\s+@(\w+)", re.IGNORECASE
 )
 
 
@@ -148,19 +167,28 @@ def resolve_player_mention(
     mentions: list[str],
     exclude_handles: list[str],
 ) -> PlayerMention:
-    """For a reporter/coach tweet: the player is the @mention that isn't a
-    school/outlet/coach account. Falls back to parsing the name out of the
-    tweet text (e.g. "2027 QB John Smith has committed to...") with a blank
-    handle when no such mention exists.
+    """For a reporter/coach tweet, who the player is.
+
+    A name in the announcement itself ("2027 DL John Smith has committed
+    to...") wins, with its handle only if tagged right after the name
+    ("John Smith (@jsmith)"): reporters' @mentions are usually credits to
+    themselves or their outlet, not the player. Without such a name, the
+    first @mention that isn't a school/coach/credit account is used.
     """
     excluded = {h.lstrip("@").lower() for h in exclude_handles}
     excluded |= {h.lower() for h in COACH_MENTION_RE.findall(text)}
-    for mention in mentions:
-        if mention.lstrip("@").lower() not in excluded:
-            return PlayerMention(handle=mention.lstrip("@"), name="")
+    excluded |= {h.lower() for h in CREDIT_MENTION_RE.findall(text)}
+    excluded |= {m.lstrip("@").lower() for m in mentions if OUTLET_HANDLE_RE.search(m)}
 
     m = NAME_BEFORE_VERB_RE.search(text)
     if m:
-        return PlayerMention(handle="", name=m.group("name").strip())
+        name = m.group("name").strip()
+        tagged = re.search(re.escape(name) + r"\s*\(\s*@(\w+)\s*\)", text)
+        handle = tagged.group(1) if tagged and tagged.group(1).lower() not in excluded else ""
+        return PlayerMention(handle=handle, name=name)
+
+    for mention in mentions:
+        if mention.lstrip("@").lower() not in excluded:
+            return PlayerMention(handle=mention.lstrip("@"), name="")
 
     return PlayerMention(handle="", name="")
