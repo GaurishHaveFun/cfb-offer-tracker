@@ -129,3 +129,33 @@ def test_short_year_before_apostrophe_is_a_class_year_only_when_glued():
     assert parse_class_year("5⭐️ 28’RIVALS #1 WR") == "2028"
     assert parse_class_year("4⭐️/28’/WR") == "2028"
     assert parse_class_year("Sports Journalist (in Training) | UCF 26' | 🇦🇺") == ""
+
+
+def test_year_inside_a_date_is_not_a_class_year():
+    assert parse_class_year("Classic game ~ Sept 6, 2026 | Fake Stadium") == ""
+    assert parse_class_year("Kickoff 9/6/2026 at Fake Field") == ""
+    assert parse_class_year("Kickoff September 2026") == ""
+    assert parse_class_year("WR | Class of 2026 | Fakeville HS") == "2026"
+    assert parse_class_year("QB 2027 | Fakeville HS") == "2027"
+
+
+def test_event_promo_commitment_wording_is_not_a_commit(schools):
+    text = ("From South Florida to the pros and a continued commitment to the next "
+            "generation. 🏈 Join us at the Fake Kickoff Luncheon in Miami, FL")
+    assert schools_of(text, schools) == []
+
+
+def test_list_of_schools_that_have_offered_is_not_new(schools):
+    text = ("Fake County (Ga.) 2029 DL Fake Player picked up an offer from FSU on his visit. "
+            "\n\nAuburn, Georgia, Georgia Tech, Miami, Clemson, Oregon, Ohio State, Michigan "
+            "and plenty of others have offered. 🏈")
+    assert schools_of(text, schools) == [("offer", "Florida State")]
+
+
+def test_offer_emoji_with_a_space_still_counts(schools):
+    text = "I AM VERY BLESSED TO RECEIVE MY FIRST \U0001F17E\ufe0f FFER TO THE GEORGIA STATE UNIVERSITY 🏈"
+    assert schools_of(text, schools) == [("offer", "Georgia State")]
+
+
+def test_bare_school_offered_still_counts(schools):
+    assert schools_of("Oklahoma offered #blessed 🏈", schools) == [("offer", "Oklahoma")]

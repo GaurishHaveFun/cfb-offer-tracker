@@ -95,7 +95,7 @@ HARD_OFFER_PATTERNS = [
 
 # "blessed to receive" also precedes awards, visits, etc. - an offer event
 # needs the word itself (incl. the "🅾️ffer" emoji spelling).
-OFFER_WORD_RE = re.compile(r"offer|\U0001F17E\ufe0f?ffer", re.IGNORECASE)
+OFFER_WORD_RE = re.compile(r"offer|\U0001F17E\ufe0f?\s?ffer", re.IGNORECASE)
 
 FLIP_RE = re.compile(
     r"flips?\s+to\s+(?P<to>[^.,!\n]+?)(?:\s+from\s+(?P<from>[^.,!\n]+))?(?:[.,!\n]|$)",
@@ -448,8 +448,12 @@ def flip_schools(text: str, schools: list[School]) -> tuple[str | None, str | No
 # receive my 18th offer from The University Of Tennessee" (school after).
 OFFER_WINDOW_BEFORE = 40
 OFFER_WINDOW_AFTER = 90
+HAVE_OFFERED_BEFORE_RE = re.compile(r"\bha(?:ve|s)\s+(?:also\s+|already\s+)?$", re.IGNORECASE)
 OFFER_LIST_RE = re.compile(
-    r"\b(?:also\s+)?holds?\s+(?:\w+\s+)?offers?|other\s+offers|offers\s+(?:from|include)", re.IGNORECASE
+    r"\b(?:also\s+)?holds?\s+(?:\w+\s+)?offers?|other\s+offers|offers\s+(?:from|include)"
+    # a following sentence that lists schools which "have offered" already
+    r"|[.!?]\s+(?=[^.!?\n]*\bha(?:ve|s)\s+(?:also\s+|already\s+)?offered)",
+    re.IGNORECASE,
 )
 
 
@@ -458,12 +462,19 @@ def offer_windows(text: str) -> str:
     spans = []
     for p in OFFER_PATTERNS:
         for m in re.finditer(p, text, re.IGNORECASE):
-            after = text[m.end(): m.end() + OFFER_WINDOW_AFTER]
+            # "Auburn, Georgia, Miami and others have offered" lists offers the
+            # player already holds - not the news in this tweet.
+            if HAVE_OFFERED_BEFORE_RE.search(text[max(0, m.start() - 20): m.start()]):
+                continue
+            end = m.end() + OFFER_WINDOW_AFTER
             # "...reports an offer from Washington. Also holds offers from
             # Oregon, ..." - schools in the existing-offers list aren't new.
-            cut = OFFER_LIST_RE.search(after)
-            if cut:
-                after = after[: cut.start()]
+            # Searched on the rest of the tweet, not just the window, since a
+            # "... have offered." list can end well past the window.
+            cut = OFFER_LIST_RE.search(text, m.end())
+            if cut and cut.start() < end:
+                end = cut.start()
+            after = text[m.end(): end]
             spans.append(text[max(0, m.start() - OFFER_WINDOW_BEFORE): m.end()] + after)
     return "\n".join(spans)
 

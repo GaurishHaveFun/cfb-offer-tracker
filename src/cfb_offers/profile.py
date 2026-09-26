@@ -88,8 +88,23 @@ STATE_NAMES = {
 }
 
 
+# A bare 4-digit year that's part of a date ("September 6, 2026",
+# "9/6/2026", "Sept. 2026") is an event date, not a class year.
+_DATE_BEFORE_YEAR_RE = re.compile(
+    r"(?:\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+(?:\d{1,2}(?:st|nd|rd|th)?,?\s+)?"
+    r"|\b\d{1,2}[/.-]\d{1,2}[/.-])$",
+    re.IGNORECASE,
+)
+
+
 def parse_class_year(text: str) -> str:
-    m = CLASS_YEAR_RE.search(text or "")
+    text = text or ""
+    m = None
+    for cand in CLASS_YEAR_RE.finditer(text):
+        if cand.group("full3") and _DATE_BEFORE_YEAR_RE.search(text[: cand.start()]):
+            continue
+        m = cand
+        break
     if not m:
         return ""
     for key in ("full1", "full2", "full3"):
