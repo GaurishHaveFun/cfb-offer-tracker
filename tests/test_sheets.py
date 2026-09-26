@@ -343,3 +343,11 @@ def test_blank_header_cell_is_restored_not_fatal():
 def test_existing_keys_are_found_even_if_header_is_blanked_mid_run():
     ws = FakeWorksheet(rows=[[""] + sheets.HEADER[1:], ["k1"], ["k2"]])
     assert sheets.load_existing_event_keys(ws) == {"k1": 2, "k2": 3}
+
+
+def test_dropped_connection_is_retried(monkeypatch):
+    import requests
+    monkeypatch.setattr(sheets.time, "sleep", lambda s: None)
+    ws = FakeWorksheet(rows=[sheets.HEADER])
+    ws.fail_next("get_all_values", requests.exceptions.ConnectionError("Connection reset by peer"), times=2)
+    assert sheets.load_existing_event_keys(ws) == {}

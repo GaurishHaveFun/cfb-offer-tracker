@@ -12,6 +12,7 @@ import sys
 import time
 
 import gspread
+import requests
 from gspread.exceptions import APIError, WorksheetNotFound
 
 from cfb_offers.dedupe import add_source
@@ -41,8 +42,9 @@ class SheetAccessError(RuntimeError):
 
 
 def _with_retry(func, *args, **kwargs):
-    """Calls func(*args, **kwargs), retrying on APIError 429/5xx with
-    exponential backoff. Re-raises immediately on any other error.
+    """Calls func(*args, **kwargs), retrying on APIError 429/5xx and on
+    dropped/timed-out connections, with exponential backoff. Re-raises
+    immediately on any other error.
     """
     delay = _BASE_DELAY_SECONDS
     for attempt in range(_MAX_RETRIES):
@@ -51,6 +53,13 @@ def _with_retry(func, *args, **kwargs):
         except APIError as e:
             code = getattr(e, "code", None)
             if code not in _RETRY_STATUS_CODES or attempt == _MAX_RETRIES - 1:
+                raise
+            time.sleep(delay)
+            delay *= 2
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+            # A connection left idle during a long X rate-limit wait can be
+            # dropped ("Connection reset by peer"); a retry reconnects.
+            if attempt == _MAX_RETRIES - 1:
                 raise
             time.sleep(delay)
             delay *= 2
