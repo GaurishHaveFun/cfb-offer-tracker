@@ -94,10 +94,37 @@ def _open_worksheet(gc: gspread.Client, sheet_id: str, sa_email: str) -> gspread
     return ws
 
 
+# Friendly header labels people use in the sheet, beyond the "same words,
+# different case/spacing" rule in _header_cell_ok ("Player Name" is fine).
+HEADER_ALIASES: dict[str, set[str]] = {
+    "high_school": {"hs", "school (hs)", "high school"},
+}
+
+
+def _normalize_label(label: str) -> str:
+    return "_".join(label.strip().lower().replace("-", " ").split())
+
+
+def _header_cell_ok(found: str, expected: str) -> bool:
+    return (
+        _normalize_label(found) == expected
+        or found.strip().lower() in HEADER_ALIASES.get(expected, set())
+    )
+
+
+def _header_matches(found: list[str]) -> bool:
+    """The header is fine if every column is where the code expects it,
+    whatever its display label ("Player Name" for player_name, "HS" for
+    high_school). Columns are read by position, so a moved, inserted or
+    deleted column is the thing this must catch."""
+    found = found + [""] * (len(HEADER) - len(found))
+    return len(found) == len(HEADER) and all(_header_cell_ok(f, h) for f, h in zip(found, HEADER))
+
+
 def _only_blanked(found: list[str]) -> bool:
     """True if `found` is the expected header with some cells emptied."""
     found = found + [""] * (len(HEADER) - len(found))
-    return len(found) == len(HEADER) and all(f in ("", h) for f, h in zip(found, HEADER))
+    return len(found) == len(HEADER) and all(f == "" or _header_cell_ok(f, h) for f, h in zip(found, HEADER))
 
 
 def _ensure_header(ws: gspread.Worksheet) -> None:
@@ -112,18 +139,22 @@ def _ensure_header(ws: gspread.Worksheet) -> None:
         return
 
     existing_header = values[0]
-    if existing_header != HEADER and _only_blanked(existing_header):
+    if not _header_matches(existing_header) and _only_blanked(existing_header):
         # Someone cleared a header cell (e.g. A1) by hand; every other cell
-        # still matches, so it's safe to put the header back.
+        # still matches, so fill in just the blank ones (keeping any
+        # renamed labels as they are).
         print("warning: restored blank header cell(s) in the offers tab", file=sys.stderr)
-        _with_retry(ws.update, [HEADER], "A1", value_input_option="RAW")
-        existing_header = HEADER
-    if existing_header != HEADER:
+        padded = existing_header + [""] * (len(HEADER) - len(existing_header))
+        healed = [f or h for f, h in zip(padded, HEADER)]
+        _with_retry(ws.update, [healed], "A1", value_input_option="RAW")
+        existing_header = healed
+    if not _header_matches(existing_header):
         raise SheetSchemaError(
             "sheet header does not match the OfferRecord schema.\n"
             f"  expected: {HEADER}\n"
             f"  found:    {existing_header}\n"
-            "Fix the sheet's header row (or the schema) before running again."
+            "Header labels can be renamed, but columns must stay in this order "
+            "(no moved, inserted or deleted columns). Fix the header row and run again."
         )
     # Freezing is idempotent - harmless to call every time, and it heals a
     # sheet that had its freeze cleared out from under it.

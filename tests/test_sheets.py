@@ -351,3 +351,29 @@ def test_dropped_connection_is_retried(monkeypatch):
     ws = FakeWorksheet(rows=[sheets.HEADER])
     ws.fail_next("get_all_values", requests.exceptions.ConnectionError("Connection reset by peer"), times=2)
     assert sheets.load_existing_event_keys(ws) == {}
+
+
+def test_renamed_header_labels_are_accepted():
+    renamed = list(sheets.HEADER)
+    for i, label in {1: "Event Type", 3: "School", 4: "Player Name", 10: "HS", 11: "State"}.items():
+        renamed[i] = label
+    ws = FakeWorksheet(rows=[renamed])
+    sheets._ensure_header(ws)
+    assert ws.rows[0] == renamed  # labels left as the user set them
+
+
+def test_blank_cell_is_filled_without_undoing_renames():
+    renamed = [""] + ["Event Type"] + sheets.HEADER[2:]
+    ws = FakeWorksheet(rows=[renamed])
+    sheets._ensure_header(ws)
+    assert ws.rows[0] == ["event_key", "Event Type"] + sheets.HEADER[2:]
+
+
+def test_moved_or_inserted_column_still_stops_the_run():
+    moved = list(sheets.HEADER)
+    moved[3], moved[4] = moved[4], moved[3]
+    with pytest.raises(sheets.SheetSchemaError):
+        sheets._ensure_header(FakeWorksheet(rows=[moved]))
+    inserted = sheets.HEADER[:3] + ["My Notes"] + sheets.HEADER[3:]
+    with pytest.raises(sheets.SheetSchemaError):
+        sheets._ensure_header(FakeWorksheet(rows=[inserted]))
