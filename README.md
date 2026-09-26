@@ -112,6 +112,24 @@ long enough that you should expect at least one rate-limit wait unless you
 add more than one cookie line to `X_COOKIES` — each additional account
 gives twscrape somewhere else to rotate to instead of waiting.
 
+### Cleaning up the sheet after a rule change
+
+Rows already in the sheet aren't re-checked when the filters improve. To
+re-check them against the current rules, point `--prune-sheet` at the
+`--dump-raw` file from the run that wrote them:
+
+```
+X_COOKIES="$(cat x_cookies.txt)" GOOGLE_SERVICE_ACCOUNT_JSON="$(cat sa.json)" SHEET_ID=... \
+  python -m cfb_offers --prune-sheet backfill.jsonl           # report counts only
+  python -m cfb_offers --prune-sheet backfill.jsonl --apply   # move them
+```
+
+With `--apply`, rejected rows and duplicate reports of the same event are
+**moved to a `pruned` tab** (with `pruned_at` and `prune_reason` columns),
+never just deleted - a row is only removed from `offers` after it has been
+copied. Rows whose tweets aren't in the raw file are left alone. Stop any
+running scrape first so the two don't edit the sheet at the same time.
+
 ## Local development
 
 ```

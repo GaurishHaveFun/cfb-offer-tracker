@@ -18,6 +18,10 @@ from cfb_offers.models import OfferRecord
 
 HEADER = OfferRecord.columns()
 WORKSHEET_NAME = "offers"
+# Rows removed by --prune-sheet are moved here (never just deleted), with
+# when and why, so any prune can be reviewed and undone by hand.
+PRUNED_WORKSHEET_NAME = "pruned"
+PRUNED_HEADER = HEADER + ["pruned_at", "prune_reason"]
 
 # Retry gspread calls that fail with a rate-limit (429) or server error
 # (5xx) response - both are transient and worth a backoff-and-retry instead
@@ -177,6 +181,76 @@ def sync_records(ws: gspread.Worksheet, records: list[OfferRecord]) -> tuple[int
     if to_append:
         _with_retry(ws.append_rows, to_append, value_input_option="RAW")
     return len(to_append), updated
+
+
+def read_rows(ws: gspread.Worksheet) -> list[tuple[int, dict[str, str]]]:
+    """Every data row as (sheet_row_number, {column: value}); row numbers
+    are 1-indexed and count the header row."""
+    values = _with_retry(ws.get_all_values)
+    if len(values) <= 1:
+        return []
+    header = values[0]
+    out = []
+    for i, row in enumerate(values[1:], start=2):
+        row = row + [""] * (len(header) - len(row))
+        out.append((i, dict(zip(header, row))))
+    return out
+
+
+def _pruned_worksheet(ws: gspread.Worksheet) -> gspread.Worksheet:
+    sh = ws.spreadsheet
+    try:
+        pruned = _with_retry(sh.worksheet, PRUNED_WORKSHEET_NAME)
+    except WorksheetNotFound:
+        pruned = _with_retry(
+            sh.add_worksheet, title=PRUNED_WORKSHEET_NAME, rows=1000, cols=len(PRUNED_HEADER)
+        )
+    if not _with_retry(pruned.row_values, 1):
+        _with_retry(pruned.append_rows, [PRUNED_HEADER], value_input_option="RAW")
+        _with_retry(pruned.freeze, rows=1)
+    return pruned
+
+
+def update_also_reported_by(ws: gspread.Worksheet, updates: dict[int, str]) -> None:
+    """Sets also_reported_by on the given rows ({row_number: value}) in one batch."""
+    col = HEADER.index("also_reported_by") + 1
+    data = [
+        {"range": gspread.utils.rowcol_to_a1(row_num, col), "values": [[value]]}
+        for row_num, value in updates.items()
+    ]
+    _with_retry(ws.batch_update, data, value_input_option="RAW")
+
+
+def move_to_pruned(
+    ws: gspread.Worksheet,
+    rows: list[tuple[int, dict[str, str], str]],
+    pruned_at: str,
+) -> None:
+    """Copies each (row_number, row, reason) to the `pruned` tab, then - only
+    once that copy has succeeded - deletes those rows from `ws` in a single
+    batch request (bottom-up, so earlier deletions don't shift later ones)."""
+    if not rows:
+        return
+    pruned = _pruned_worksheet(ws)
+    _with_retry(
+        pruned.append_rows,
+        [[row.get(c, "") for c in HEADER] + [pruned_at, reason] for _, row, reason in rows],
+        value_input_option="RAW",
+    )
+    requests = [
+        {
+            "deleteDimension": {
+                "range": {
+                    "sheetId": ws.id,
+                    "dimension": "ROWS",
+                    "startIndex": row_num - 1,
+                    "endIndex": row_num,
+                }
+            }
+        }
+        for row_num in sorted({r for r, _, _ in rows}, reverse=True)
+    ]
+    _with_retry(ws.spreadsheet.batch_update, {"requests": requests})
 
 
 def check_sheet(service_account_json: str, sheet_id: str) -> None:

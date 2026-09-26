@@ -22,7 +22,7 @@ from cfb_offers.client import (
     search_limit,
 )
 from cfb_offers.config import School, env, load_schools
-from cfb_offers.dedupe import dedupe_events, make_event_key
+from cfb_offers.dedupe import add_source, dedupe_events, make_event_key
 from cfb_offers.models import OfferRecord
 from cfb_offers.profile import parse_bio
 from cfb_offers.queries import build_all_queries
@@ -43,6 +43,20 @@ CI_MAX_SINCE_DAYS = 3
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Scrape X for CFB offer/commit/decommit tweets.")
     p.add_argument("--since-days", type=int, default=None, help="override the lookback window")
+    p.add_argument(
+        "--prune-sheet",
+        metavar="RAW_JSONL",
+        default=None,
+        help=(
+            "re-check sheet rows against the current rules using the tweets saved in a "
+            "--dump-raw file; reports counts only unless --apply is given"
+        ),
+    )
+    p.add_argument(
+        "--apply",
+        action="store_true",
+        help="with --prune-sheet: move rejected/duplicate rows to the 'pruned' tab",
+    )
     p.add_argument("--dry-run", action="store_true", help="write to a local CSV instead of the sheet")
     p.add_argument("--out", default="sample.csv", help="CSV path for --dry-run")
     p.add_argument("--max-pages", type=int, default=None, help="override pages-per-query cap")
@@ -267,16 +281,9 @@ def _read_jsonl(path: str) -> list[dict]:
     return rows
 
 
-async def _run_from_raw(args: argparse.Namespace) -> list[OfferRecord]:
-    """Reclassifies a --dump-raw JSONL file, no network calls at all - for
-    offline tuning of the classify/sources/profile rules without burning
-    rate limits. Always writes --out (like --dry-run); never touches the
-    sheet.
-    """
-    schools_cfg = load_schools()
-    school_handles = _all_school_handles(schools_cfg)
-    raw_tweets = _read_jsonl(args.from_raw)
-
+async def _replay(raw_tweets: list[dict], schools_cfg: list[School], school_handles: list[str]):
+    """Runs saved tweets through process_tweet offline. Returns (records
+    before dedupe, tweets_seen, noise_dropped, unclassified_dropped)."""
     records: list[OfferRecord] = []
     tweets_seen = 0
     tweets_dropped_noise = 0
@@ -315,6 +322,108 @@ async def _run_from_raw(args: argparse.Namespace) -> list[OfferRecord]:
             tweets_dropped_noise += 1
         records.extend(recs)
 
+    return records, tweets_seen, tweets_dropped_noise, tweets_dropped_unclassified
+
+
+def plan_prune(
+    sheet_rows: list[tuple[int, dict[str, str]]],
+    replayed: list[OfferRecord],
+    known_tweet_ids: set[str],
+) -> tuple[list[tuple[int, dict[str, str], str]], dict[int, str]]:
+    """Decides which sheet rows to prune, given a fresh replay of the tweets
+    behind them. Pure, so it's testable without a sheet.
+
+    - A row whose tweet isn't in the raw file is left alone (can't re-check).
+    - A row the current rules no longer produce is pruned.
+    - Rows that the current rules say are the same event (e.g. one commit
+      reported by several accounts) keep only the earliest tweet; the rest
+      are pruned and their source handle is folded into the kept row's
+      also_reported_by.
+
+    Returns (rows_to_prune as (row_num, row, reason), {kept_row_num: new
+    also_reported_by}).
+    """
+    by_tweet = {(r.tweet_id, r.school, r.event_type): r for r in replayed}
+    prune: list[tuple[int, dict[str, str], str]] = []
+    groups: dict[str, list[tuple[int, dict[str, str]]]] = {}
+    for row_num, row in sheet_rows:
+        if row.get("tweet_id") not in known_tweet_ids:
+            continue
+        rec = by_tweet.get((row.get("tweet_id"), row.get("school"), row.get("event_type")))
+        if rec is None:
+            prune.append((row_num, row, "rejected by current rules"))
+            continue
+        groups.setdefault(rec.event_key, []).append((row_num, row))
+
+    also_updates: dict[int, str] = {}
+    for rows in groups.values():
+        if len(rows) < 2:
+            continue
+        rows.sort(key=lambda x: (x[1].get("tweet_date", ""), x[1].get("tweet_id", "")))
+        keep_num, keep = rows[0]
+        also = keep.get("also_reported_by", "")
+        for row_num, row in rows[1:]:
+            prune.append((row_num, row, f"duplicate of tweet {keep.get('tweet_id')}"))
+            for h in [row.get("source_handle", "")] + row.get("also_reported_by", "").split(","):
+                h = h.strip()
+                if h and h != keep.get("source_handle"):
+                    also = add_source(also, h)
+        if also != keep.get("also_reported_by", ""):
+            also_updates[keep_num] = also
+    return prune, also_updates
+
+
+async def _prune_sheet(args: argparse.Namespace) -> list[OfferRecord]:
+    """--prune-sheet: re-checks the sheet against the current rules. Counts
+    only are printed. With --apply, pruned rows are moved to the 'pruned'
+    tab (copied there first, then removed from 'offers')."""
+    schools_cfg = load_schools()
+    school_handles = _all_school_handles(schools_cfg)
+    raw_tweets = _read_jsonl(args.prune_sheet)
+    known_ids = {rt.get("id", "") for rt in raw_tweets}
+
+    ws = sheets.open_sheet(
+        env("GOOGLE_SERVICE_ACCOUNT_JSON", required=True), env("SHEET_ID", required=True)
+    )
+    sheet_rows = sheets.read_rows(ws)
+    in_sheet = {row.get("tweet_id") for _, row in sheet_rows}
+    replayed, *_ = await _replay(
+        [rt for rt in raw_tweets if rt.get("id") in in_sheet], schools_cfg, school_handles
+    )
+    prune, also_updates = plan_prune(sheet_rows, replayed, known_ids)
+
+    rejected = sum(1 for *_, reason in prune if reason.startswith("rejected"))
+    unchecked = sum(1 for _, row in sheet_rows if row.get("tweet_id") not in known_ids)
+    print(
+        f"prune_sheet: rows={len(sheet_rows)} to_prune={len(prune)} "
+        f"(rejected={rejected} duplicates={len(prune) - rejected}) "
+        f"also_reported_by_updates={len(also_updates)} not_in_raw_file={unchecked}"
+    )
+    if not args.apply:
+        print("prune_sheet: report only - rerun with --apply to move these rows to the 'pruned' tab")
+        return []
+
+    if also_updates:
+        sheets.update_also_reported_by(ws, also_updates)
+    sheets.move_to_pruned(ws, prune, dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"))
+    print(f"prune_sheet: moved {len(prune)} rows to the 'pruned' tab")
+    return []
+
+
+async def _run_from_raw(args: argparse.Namespace) -> list[OfferRecord]:
+    """Reclassifies a --dump-raw JSONL file, no network calls at all - for
+    offline tuning of the classify/sources/profile rules without burning
+    rate limits. Always writes --out (like --dry-run); never touches the
+    sheet.
+    """
+    schools_cfg = load_schools()
+    school_handles = _all_school_handles(schools_cfg)
+    raw_tweets = _read_jsonl(args.from_raw)
+
+    records, tweets_seen, tweets_dropped_noise, tweets_dropped_unclassified = await _replay(
+        raw_tweets, schools_cfg, school_handles
+    )
+
     records = dedupe_events(records)
 
     with open(args.out, "w", newline="") as f:
@@ -341,6 +450,8 @@ async def run(argv: list[str] | None = None) -> list[OfferRecord]:
         return []
     if args.from_raw:
         return await _run_from_raw(args)
+    if args.prune_sheet:
+        return await _prune_sheet(args)
 
     schools_cfg = load_schools()
     school_handles = _all_school_handles(schools_cfg)
