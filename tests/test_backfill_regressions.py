@@ -159,3 +159,61 @@ def test_offer_emoji_with_a_space_still_counts(schools):
 
 def test_bare_school_offered_still_counts(schools):
     assert schools_of("Oklahoma offered #blessed 🏈", schools) == [("offer", "Oklahoma")]
+
+
+
+# --- rest of the SEC ---------------------------------------------------------
+
+def test_new_sec_schools_match(schools):
+    for text, school in [
+        ("Blessed to receive an offer from Auburn University! #WarEagle 🏈", "Auburn"),
+        ("Blessed to receive an offer from the University of Arkansas 🐗 🏈", "Arkansas"),
+        ("Blessed to receive an offer from Kentucky 🏈", "Kentucky"),
+        ("Blessed to receive an offer from Mississippi State #HailState 🏈", "Mississippi State"),
+        ("Blessed to receive an offer from Mizzou 🏈", "Missouri"),
+        ("Blessed to receive an offer from Ole Miss #HottyToddy 🏈", "Ole Miss"),
+        ("Blessed to receive an offer from the University of South Carolina 🏈", "South Carolina"),
+        ("Blessed to receive an offer from Vanderbilt #AnchorDown 🏈", "Vanderbilt"),
+    ]:
+        assert schools_of(text, schools) == [("offer", school)], text
+
+
+def test_sec_look_alikes_are_rejected(schools):
+    for text in [
+        "Blessed to receive an offer from Arkansas State 🏈",
+        "Blessed to receive an offer from Arkansas-Pine Bluff 🏈",
+        "Blessed to receive an offer from Central Arkansas 🏈",
+        "Blessed to receive an offer from Missouri State 🏈",
+        "Blessed to receive an offer from Missouri Western 🏈",
+        "Blessed to receive an offer from Southeast Missouri State 🏈",
+        "Blessed to receive an offer from Western Kentucky 🏈",
+        "Blessed to receive an offer from Eastern Kentucky 🏈",
+        "Blessed to receive an offer from Kentucky State 🏈",
+        "Blessed to receive an offer from South Carolina State 🏈",
+        "Blessed to receive an offer from Auburn Montgomery 🏈",
+    ]:
+        assert schools_of(text, schools) == [], text
+
+
+def test_bulldogs_alone_is_not_georgia(schools):
+    text = "Blessed to receive an offer from the Mississippi State Bulldogs 🏈"
+    assert schools_of(text, schools) == [("offer", "Mississippi State")]
+    assert schools_of("Blessed to receive an offer from the Georgia Bulldogs 🏈", schools) == [("offer", "Georgia")]
+
+
+
+def test_commit_named_before_chose_nickname_over_list(schools):
+    text = ("BREAKING: 2027 QB Fake Player has Committed to Georgia, he tells me. "
+            "The QB from Atlanta chose the Bulldogs over LSU and Michigan 🏈")
+    assert schools_of(text, schools) == [("commit", "Georgia")]
+
+
+def test_committed_to_x_over_y_picks_x(schools):
+    assert schools_of("2028 LB Fake Player has committed to Auburn over Alabama 🏈", schools) == [("commit", "Auburn")]
+
+
+def test_shared_nickname_counts_only_when_school_is_named(schools):
+    named = "Fake Player is on Georgia's radar. Now the 2028 lineman holds an offer from the Bulldogs 🏈"
+    assert schools_of(named, schools) == [("offer", "Georgia")]
+    unnamed = "Blessed to receive an offer from the McFake College Bulldogs! 🏈"
+    assert schools_of(unnamed, schools) == []

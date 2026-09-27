@@ -16,6 +16,11 @@ class School:
     aliases: list[str]
     handles: list[str]
     coach_handles: list[str]
+    # Nicknames shared with other schools ("Bulldogs", "Tigers"): never
+    # enough to name the school on their own, but they do count as naming it
+    # near an offer/commit phrase when the tweet also names the school with a
+    # main alias somewhere ("on Georgia's radar ... an offer from the Bulldogs").
+    context_aliases: tuple[str, ...] = ()
 
 
 def load_schools(path: str | Path = DEFAULT_SCHOOLS_PATH) -> list[School]:
@@ -26,6 +31,7 @@ def load_schools(path: str | Path = DEFAULT_SCHOOLS_PATH) -> list[School]:
             aliases=s.get("aliases", []),
             handles=s.get("handles", []),
             coach_handles=s.get("coach_handles", []),
+            context_aliases=tuple(s.get("context_aliases", [])),
         )
         for s in data["schools"]
     ]

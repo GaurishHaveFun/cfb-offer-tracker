@@ -1,4 +1,6 @@
-# 26 CFB programs (the original 15 blue-bloods plus 11 added later).
+# 34 CFB programs: the original 15, 11 added later, and the rest of the
+# 16-team SEC (Arkansas, Auburn, Kentucky, Mississippi State, Missouri,
+# Ole Miss, South Carolina, Vanderbilt). SEC handles below are also unverified.
 # Handles for the 11 added schools were supplied by the user, not looked up
 # (no network access here) - @IUFootball, @GeorgiaStateFB and
 # @GSAthletics_FB are the least certain of the bunch and are flagged
@@ -25,7 +27,8 @@ schools:
     handles: ["oregonfootball"]
     coach_handles: []
   - name: Georgia
-    aliases: ["Georgia", "UGA", "Bulldogs", "@GeorgiaFootball", "#GoDawgs"]
+    aliases: ["Georgia", "UGA", "Georgia Bulldogs", "@GeorgiaFootball", "#GoDawgs"]  # bare "Bulldogs" is also Mississippi State
+    context_aliases: ["Bulldogs", "Dawgs"]
     handles: ["GeorgiaFootball"]
     coach_handles: []
   - name: Texas
@@ -137,4 +140,45 @@ schools:
     # the disambiguated "Georgia Southern Eagles" form is trusted.
     aliases: ["Georgia Southern", "Georgia Southern Eagles"]
     handles: ["GSAthletics_FB"]  # verify
+    coach_handles: []
+  # --- rest of the SEC ---------------------------------------------------
+  # Shared mascots ("Tigers" = Auburn/Missouri/LSU/Clemson, "Wildcats",
+  # "Bulldogs", "Rebels") are left out or only used with the school name.
+  - name: Arkansas
+    aliases: ["Arkansas", "Razorbacks", "#WPS", "@RazorbackFB"]
+    handles: ["RazorbackFB"]  # verify
+    coach_handles: []
+  - name: Auburn
+    aliases: ["Auburn", "War Eagle", "#WarEagle", "@AuburnFootball"]
+    handles: ["AuburnFootball"]  # verify
+    context_aliases: ["Tigers"]
+    coach_handles: []
+  - name: Kentucky
+    aliases: ["Kentucky", "Kentucky Wildcats", "#BBN", "@UKFootball"]
+    handles: ["UKFootball"]  # verify
+    context_aliases: ["Wildcats"]
+    coach_handles: []
+  - name: Mississippi State
+    aliases: ["Mississippi State", "Miss State", "#HailState", "@HailStateFB"]
+    handles: ["HailStateFB"]  # verify
+    context_aliases: ["Bulldogs"]
+    coach_handles: []
+  - name: Missouri
+    aliases: ["Missouri", "Mizzou", "#MIZ", "@MizzouFootball"]
+    handles: ["MizzouFootball"]  # verify
+    context_aliases: ["Tigers"]
+    coach_handles: []
+  - name: Ole Miss
+    aliases: ["Ole Miss", "University of Mississippi", "#HottyToddy", "@OleMissFB"]
+    handles: ["OleMissFB"]  # verify
+    context_aliases: ["Rebels"]
+    coach_handles: []
+  - name: South Carolina
+    aliases: ["South Carolina", "Gamecocks", "#ForeverToThee", "@GamecockFB"]
+    handles: ["GamecockFB"]  # verify
+    coach_handles: []
+  - name: Vanderbilt
+    aliases: ["Vanderbilt", "Vandy", "#AnchorDown", "@VandyFootball"]
+    handles: ["VandyFootball"]  # verify
+    context_aliases: ["Commodores"]
     coach_handles: []

@@ -117,6 +117,8 @@ CHOSE_OVER_RE = re.compile(r"\bchose\s+(?P<to>.+?)\s+over\s+.+", re.IGNORECASE |
 SCHOOL_REJECT_PREFIXES = [
     "West", "North", "South", "East",
     "Western", "Eastern", "Northern", "Southern", "Central", "Middle",
+    # "Southeast Missouri State", "Northwest Missouri State", ...
+    "Northwest", "Northeast", "Southwest", "Southeast",
 ]
 SCHOOL_REJECT_SUFFIXES = [
     "State", "A&M", "Tech", "Southern", "Christian", "Baptist", "of Maryland",
@@ -130,6 +132,10 @@ SCHOOL_REJECT_SUFFIXES = [
     "International", "Commerce", "Indianapolis",
     # "Tennessee Valley" (a semi-pro/JUCO-level program), not Tennessee.
     "Valley",
+    # SEC expansion: "Arkansas-Pine Bluff", "Arkansas-Little Rock",
+    # "Auburn Montgomery", "Missouri Western", and high schools named after
+    # a town/state ("Auburn High School").
+    "Pine Bluff", "Little Rock", "Montgomery", "Western", "High",
 ]
 
 # --- non-football sport signals ---------------------------------------------
@@ -416,6 +422,26 @@ DIRECTED_COMMIT_RE = re.compile(r"\b(?:committed|commits?|commitment|committing)
 COMMIT_WINDOW_AFTER = 120
 
 
+def _commit_schools(text: str, schools: list[School]) -> list[str]:
+    """Tracked schools the tweet commits to. "Chose X over A, B" names X - but
+    when X is only a nickname ("chose the Bulldogs over LSU"), fall back to
+    what follows "committed to", then to school nicknames in the chose-X part
+    for schools the tweet names elsewhere."""
+    school_text = _commit_school_text(text)
+    primary = match_schools(school_text, schools)
+    if primary:
+        return _in_text_order(primary, school_text, schools)
+    m = CHOSE_OVER_RE.search(text)
+    if not m:
+        return []
+    windows = "\n".join(_directed_commit_windows(text))
+    fallback = match_schools(windows, schools) if windows else []
+    if fallback:
+        return _in_text_order(fallback, windows, schools)
+    named = match_schools(text[: m.start()], schools)
+    return [s for s in named if _school_named_in(s, m.group("to"), schools)]
+
+
 def _commit_school_text(text: str) -> str:
     """The part of the tweet that names the committing school.
 
@@ -426,8 +452,36 @@ def _commit_school_text(text: str) -> str:
     m = CHOSE_OVER_RE.search(text)
     if m:
         return m.group("to")
-    windows = [text[m.end(): m.end() + COMMIT_WINDOW_AFTER] for m in DIRECTED_COMMIT_RE.finditer(text)]
+    windows = _directed_commit_windows(text)
     return "\n".join(windows) if windows else text
+
+
+# "...committed to Georgia over LSU" / "...chose the Bulldogs over LSU": the
+# schools after "over" are the ones passed on, never the commit.
+_COMMIT_WINDOW_STOP_RE = re.compile(r"\b(?:over|chose)\b", re.IGNORECASE)
+
+
+def _directed_commit_windows(text: str) -> list[str]:
+    windows = []
+    for m in DIRECTED_COMMIT_RE.finditer(text):
+        window = text[m.end(): m.end() + COMMIT_WINDOW_AFTER]
+        stop = _COMMIT_WINDOW_STOP_RE.search(window)
+        windows.append(window[: stop.start()] if stop else window)
+    return windows
+
+
+def _in_text_order(names: list[str], text: str, schools: list[School]) -> list[str]:
+    """Orders matched schools by where the tweet first names them, so the
+    school right after "committed to" wins over one named later."""
+    low = text.lower()
+
+    def first_pos(name: str) -> int:
+        school = next(s for s in schools if s.name == name)
+        hits = [low.find(t.lstrip("@").lower()) for t in [*school.aliases, *school.handles] if t]
+        hits = [h for h in hits if h >= 0]
+        return min(hits) if hits else len(low)
+
+    return sorted(names, key=first_pos)
 
 
 def flip_schools(text: str, schools: list[School]) -> tuple[str | None, str | None]:
@@ -484,7 +538,7 @@ def _school_named_in(school_name: str, window: str, schools: list[School]) -> bo
     match_schools() already decided the school is genuinely named in the
     tweet (with all its look-alike/context rules); this only checks where."""
     school = next(s for s in schools if s.name == school_name)
-    terms = [*school.aliases, *school.handles]
+    terms = [*school.aliases, *school.handles, *school.context_aliases]
     low = window.lower()
     return any(t.lstrip("@").lower() in low for t in terms if t)
 
@@ -521,13 +575,13 @@ def classify_tweet(text: str, schools: list[School], bio: str = "") -> list[Clas
         if is_flip:
             to_school, from_school = flip_schools(text, schools)
             if to_school is None:
-                matched = match_schools(_commit_school_text(text), schools)
+                matched = _commit_schools(text, schools)
                 to_school = matched[0] if matched else None
             if to_school is None:
                 return []
             notes = f"flipped from {from_school}" if from_school else "flip"
             return [ClassifiedEvent("commit", True, to_school, notes)]
-        matched = match_schools(_commit_school_text(text), schools)
+        matched = _commit_schools(text, schools)
         if not matched:
             return []
         return [ClassifiedEvent("commit", False, matched[0])]

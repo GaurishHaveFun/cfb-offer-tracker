@@ -679,10 +679,11 @@ def test_usc_still_matches_trojans(schools):
 
 
 def test_usc_rejected_with_south_carolina_context(schools):
-    assert match_schools("Committed to USC! Go Gamecocks! 🏈", schools) == []
+    # South Carolina is tracked too (SEC), so these are South Carolina - never USC.
+    assert match_schools("Committed to USC! Go Gamecocks! 🏈", schools) == ["South Carolina"]
     assert match_schools(
         "Offered by the University of South Carolina (USC)! 🏈", schools
-    ) == []
+    ) == ["South Carolina"]
     assert match_schools("Committed to USC Upstate! 🏈", schools) == []
     assert match_schools("Offered by USC Aiken! 🏈", schools) == []
     assert match_schools("Committed to USC Beaufort! 🏈", schools) == []
