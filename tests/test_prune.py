@@ -47,15 +47,24 @@ def test_same_event_reported_twice_keeps_earliest_and_merges_source():
 
 
 class FakePrunedTab:
+    row_count = 1000
+
     def __init__(self, fail=False):
         self.rows, self.fail = [], fail
 
     def row_values(self, n):
         return self.rows[n - 1] if len(self.rows) >= n else []
 
+    def get_all_values(self):
+        return [list(r) for r in self.rows]
+
     def append_rows(self, rows, value_input_option=None):
+        self.rows.extend(rows)
+
+    def update(self, rows, rng, value_input_option=None):
         if self.fail:
-            raise RuntimeError("append failed")
+            raise RuntimeError("write failed")
+        assert rng == f"A{len(self.rows) + 1}"
         self.rows.extend(rows)
 
     def freeze(self, rows=None):

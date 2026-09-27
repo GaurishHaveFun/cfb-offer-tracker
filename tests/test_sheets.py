@@ -60,6 +60,7 @@ class FakeWorksheet:
         self.title = title
         self.freeze_calls = 0
         self.append_calls: list[tuple] = []
+        self.update_calls: list[tuple] = []
         self.batch_update_calls: list[tuple] = []
         self.delete_rows_calls: list[int] = []
         self._fail_next: dict[str, list[Exception]] = {}
@@ -106,16 +107,28 @@ class FakeWorksheet:
             for c in col_letters:
                 col_idx = col_idx * 26 + (ord(c) - ord("A") + 1)
             row_idx = row_num - 1
-            while len(self.rows[row_idx]) < col_idx:
+            new_cells = item["values"][0]
+            while len(self.rows[row_idx]) < col_idx - 1 + len(new_cells):
                 self.rows[row_idx].append("")
-            self.rows[row_idx][col_idx - 1] = item["values"][0][0]
+            for k, v in enumerate(new_cells):
+                self.rows[row_idx][col_idx - 1 + k] = v
         return {}
 
+    row_count = 1000
+
+    def add_rows(self, n):
+        self.row_count += n
+
     def update(self, values, rng="A1", value_input_option=None):
-        assert rng == "A1"
+        assert rng.startswith("A"), rng  # always anchored at column A
+        self.update_calls.append((values, rng, value_input_option))
+        start = int(rng[1:]) - 1
+        assert start + len(values) <= self.row_count, "wrote past the grid"
+        while len(self.rows) < start:
+            self.rows.append([])
         for i, v in enumerate(values):
-            if i < len(self.rows):
-                self.rows[i] = list(v)
+            if start + i < len(self.rows):
+                self.rows[start + i] = list(v)
             else:
                 self.rows.append(list(v))
         return {}
@@ -270,7 +283,7 @@ def test_append_rows_uses_raw_value_input_option():
 
     sheets.sync_records(ws, [formula_like])
 
-    assert ws.append_calls[-1][1] == "RAW"
+    assert ws.update_calls[-1][2] == "RAW"
     # the raw formula-looking text made it into the row unmolested
     assert "=cmd" in ws.rows[-1][sheets.HEADER.index("tweet_text")]
 
@@ -377,3 +390,28 @@ def test_moved_or_inserted_column_still_stops_the_run():
     inserted = sheets.HEADER[:3] + ["My Notes"] + sheets.HEADER[3:]
     with pytest.raises(sheets.SheetSchemaError):
         sheets._ensure_header(FakeWorksheet(rows=[inserted]))
+
+
+def test_new_rows_always_start_in_column_a():
+    ws = FakeWorksheet(rows=[[""] + sheets.HEADER[1:], ["k1"] + [""] * 20])
+    first = sheets.append_at_column_a(ws, [["k2"] + [""] * 20])
+    assert first == 3 and ws.rows[2][0] == "k2"
+
+
+def test_append_grows_the_grid_when_full():
+    ws = FakeWorksheet(rows=[sheets.HEADER] + [["k"]] * 999)
+    sheets.append_at_column_a(ws, [["new"]] * 3)
+    assert ws.rows[-1] == ["new"] and ws.row_count >= 1003
+
+
+def test_shifted_rows_are_moved_back():
+    good = [f"v{i}" for i in range(21)]
+    shifted = [""] + [f"s{i}" for i in range(21)]
+    ws = FakeWorksheet(rows=[sheets.HEADER + [""], good + [""], shifted])
+    assert sheets.repair_shifted_rows(ws) == 1
+    assert ws.rows[2][:21] == [f"s{i}" for i in range(21)] and ws.rows[2][21] == ""
+    assert ws.rows[1][:21] == good  # correct rows untouched
+
+
+def test_header_with_trailing_blank_column_still_matches():
+    sheets._ensure_header(FakeWorksheet(rows=[sheets.HEADER + [""]]))

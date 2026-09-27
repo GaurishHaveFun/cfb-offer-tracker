@@ -117,12 +117,23 @@ def _header_matches(found: list[str]) -> bool:
     whatever its display label ("Player Name" for player_name, "HS" for
     high_school). Columns are read by position, so a moved, inserted or
     deleted column is the thing this must catch."""
+    found = _trim(found)
     found = found + [""] * (len(HEADER) - len(found))
     return len(found) == len(HEADER) and all(_header_cell_ok(f, h) for f, h in zip(found, HEADER))
 
 
+def _trim(cells: list[str]) -> list[str]:
+    """Drops trailing empty cells (get_all_values pads every row to the
+    widest row in the sheet)."""
+    cells = list(cells)
+    while cells and not cells[-1]:
+        cells.pop()
+    return cells
+
+
 def _only_blanked(found: list[str]) -> bool:
     """True if `found` is the expected header with some cells emptied."""
+    found = _trim(found)
     found = found + [""] * (len(HEADER) - len(found))
     return len(found) == len(HEADER) and all(f == "" or _header_cell_ok(f, h) for f, h in zip(found, HEADER))
 
@@ -144,7 +155,8 @@ def _ensure_header(ws: gspread.Worksheet) -> None:
         # still matches, so fill in just the blank ones (keeping any
         # renamed labels as they are).
         print("warning: restored blank header cell(s) in the offers tab", file=sys.stderr)
-        padded = existing_header + [""] * (len(HEADER) - len(existing_header))
+        trimmed = _trim(existing_header)
+        padded = trimmed + [""] * (len(HEADER) - len(trimmed))
         healed = [f or h for f, h in zip(padded, HEADER)]
         _with_retry(ws.update, [healed], "A1", value_input_option="RAW")
         existing_header = healed
@@ -229,8 +241,39 @@ def sync_records(ws: gspread.Worksheet, records: list[OfferRecord]) -> tuple[int
         _with_retry(ws.batch_update, also_updates, value_input_option="RAW")
 
     if to_append:
-        _with_retry(ws.append_rows, to_append, value_input_option="RAW")
+        append_at_column_a(ws, to_append)
     return len(to_append), updated
+
+
+def append_at_column_a(ws: gspread.Worksheet, rows: list[list[str]]) -> int:
+    """Writes `rows` directly below the last non-empty row, starting in
+    column A. Returns the first row number written.
+
+    Sheets' own "append" guesses where the table starts, and after a header
+    cell was blanked it started writing at column B, shifting every value
+    one column right. Writing to an explicit A-column range can't drift."""
+    start = len(_with_retry(ws.get_all_values)) + 1
+    end = start + len(rows) - 1
+    if end > ws.row_count:
+        _with_retry(ws.add_rows, end - ws.row_count + 500)
+    _with_retry(ws.update, rows, f"A{start}", value_input_option="RAW")
+    return start
+
+
+def repair_shifted_rows(ws: gspread.Worksheet) -> int:
+    """Moves rows that were written one column to the right (empty column A,
+    an extra value past the last column) back into place. Returns how many
+    rows were fixed."""
+    values = _with_retry(ws.get_all_values)
+    width = len(HEADER)
+    fixes = []
+    for i, row in enumerate(values[1:], start=2):
+        if len(row) > width and not row[0] and any(row[width:]):
+            fixed = row[1 : width + 1]
+            fixes.append({"range": f"A{i}", "values": [fixed + [""] * (len(row) - len(fixed))]})
+    if fixes:
+        _with_retry(ws.batch_update, fixes, value_input_option="RAW")
+    return len(fixes)
 
 
 def read_rows(ws: gspread.Worksheet) -> list[tuple[int, dict[str, str]]]:
@@ -281,10 +324,8 @@ def move_to_pruned(
     if not rows:
         return
     pruned = _pruned_worksheet(ws)
-    _with_retry(
-        pruned.append_rows,
-        [[row.get(c, "") for c in HEADER] + [pruned_at, reason] for _, row, reason in rows],
-        value_input_option="RAW",
+    append_at_column_a(
+        pruned, [[row.get(c, "") for c in HEADER] + [pruned_at, reason] for _, row, reason in rows]
     )
     requests = [
         {
