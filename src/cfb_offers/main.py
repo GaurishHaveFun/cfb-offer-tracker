@@ -11,6 +11,7 @@ import csv
 import datetime as dt
 import json
 import sys
+from dataclasses import dataclass
 
 from cfb_offers import classify, sheets, sources
 from cfb_offers.client import (
@@ -22,7 +23,7 @@ from cfb_offers.client import (
     search_limit,
 )
 from cfb_offers.config import School, env, load_schools
-from cfb_offers.dedupe import add_source, dedupe_events, make_event_key
+from cfb_offers.dedupe import add_source, canonicalize, dedupe_events, make_event_key
 from cfb_offers.models import OfferRecord
 from cfb_offers.profile import parse_bio
 from cfb_offers.queries import backfill_slices, build_all_queries, build_slice_queries
@@ -61,6 +62,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "local long backfill: search the last N days one week at a time, paging each "
             "week until it runs out (e.g. --backfill-days 90). Not allowed in CI"
+        ),
+    )
+    p.add_argument(
+        "--only-schools",
+        default=None,
+        metavar="NAMES",
+        help=(
+            'search only these schools, comma-separated (e.g. "Auburn,Ole Miss"); '
+            "classification still considers every school"
         ),
     )
     p.add_argument(
@@ -313,6 +323,23 @@ def _read_jsonl(path: str) -> list[dict]:
 SLICE_MAX_PAGES = 25
 
 
+def select_schools(schools_cfg: list[School], only: str | None) -> list[School]:
+    """The schools to search for. --only-schools narrows the searches (e.g.
+    to backfill newly added schools); matching is case-insensitive and an
+    unknown name is an error rather than a silently empty run."""
+    if not only:
+        return schools_cfg
+    by_name = {s.name.lower(): s for s in schools_cfg}
+    wanted = [n.strip() for n in only.split(",") if n.strip()]
+    unknown = [n for n in wanted if n.lower() not in by_name]
+    if unknown:
+        raise SystemExit(
+            f"--only-schools: unknown school(s): {', '.join(unknown)}. "
+            f"Known: {', '.join(s.name for s in schools_cfg)}"
+        )
+    return [by_name[n.lower()] for n in wanted]
+
+
 def search_plan(
     schools_cfg: list[School], since_days: int, backfill_days: int | None, resume_from_slice: int = 1
 ) -> list[tuple[str, str]]:
@@ -378,29 +405,42 @@ async def _replay(raw_tweets: list[dict], schools_cfg: list[School], school_hand
     return records, tweets_seen, tweets_dropped_noise, tweets_dropped_unclassified
 
 
-def plan_prune(
+@dataclass
+class ResyncPlan:
+    prune: list[tuple[int, dict[str, str], str]]  # (row_num, row, reason)
+    also_updates: dict[int, str]  # kept row_num -> merged also_reported_by
+    key_updates: dict[int, str]  # kept row_num -> current event_key
+    adds: list[OfferRecord]  # events the current rules find that the sheet lacks
+
+
+def plan_resync(
     sheet_rows: list[tuple[int, dict[str, str]]],
     replayed: list[OfferRecord],
     known_tweet_ids: set[str],
-) -> tuple[list[tuple[int, dict[str, str], str]], dict[int, str]]:
-    """Decides which sheet rows to prune, given a fresh replay of the tweets
-    behind them. Pure, so it's testable without a sheet.
+) -> ResyncPlan:
+    """Brings the sheet in line with the current rules, given a fresh replay
+    of every tweet in a --dump-raw file. Pure, so it's testable without a
+    sheet.
 
     - A row whose tweet isn't in the raw file is left alone (can't re-check).
-    - A row the current rules no longer produce is pruned.
-    - Rows that the current rules say are the same event (e.g. one commit
-      reported by several accounts) keep only the earliest tweet; the rest
-      are pruned and their source handle is folded into the kept row's
-      also_reported_by.
-
-    Returns (rows_to_prune as (row_num, row, reason), {kept_row_num: new
-    also_reported_by}).
+    - A row the current rules no longer produce is pruned (e.g. a commit
+      that was credited to the wrong school).
+    - Rows the current rules say are the same event keep only the earliest
+      tweet; the rest are pruned and their sources folded into the kept
+      row's also_reported_by. Kept rows get the current event_key, so later
+      scrapes dedupe against it.
+    - Events the current rules find in the raw file that no remaining row
+      covers are added (the corrected school for a pruned commit, or tweets
+      the old rules missed).
     """
+    replayed = canonicalize(replayed)
     by_tweet = {(r.tweet_id, r.school, r.event_type): r for r in replayed}
     prune: list[tuple[int, dict[str, str], str]] = []
     groups: dict[str, list[tuple[int, dict[str, str]]]] = {}
+    covered: set[str] = set()
     for row_num, row in sheet_rows:
         if row.get("tweet_id") not in known_tweet_ids:
+            covered.add(row.get("event_key", ""))
             continue
         rec = by_tweet.get((row.get("tweet_id"), row.get("school"), row.get("event_type")))
         if rec is None:
@@ -409,11 +449,13 @@ def plan_prune(
         groups.setdefault(rec.event_key, []).append((row_num, row))
 
     also_updates: dict[int, str] = {}
-    for rows in groups.values():
-        if len(rows) < 2:
-            continue
+    key_updates: dict[int, str] = {}
+    for key, rows in groups.items():
+        covered.add(key)
         rows.sort(key=lambda x: (x[1].get("tweet_date", ""), x[1].get("tweet_id", "")))
         keep_num, keep = rows[0]
+        if keep.get("event_key") != key:
+            key_updates[keep_num] = key
         also = keep.get("also_reported_by", "")
         for row_num, row in rows[1:]:
             prune.append((row_num, row, f"duplicate of tweet {keep.get('tweet_id')}"))
@@ -423,13 +465,23 @@ def plan_prune(
                     also = add_source(also, h)
         if also != keep.get("also_reported_by", ""):
             also_updates[keep_num] = also
-    return prune, also_updates
+
+    adds = [r for r in dedupe_events(replayed) if r.event_key not in covered]
+    return ResyncPlan(prune, also_updates, key_updates, adds)
+
+
+def plan_prune(sheet_rows, replayed, known_tweet_ids):
+    """(prune, also_updates) part of plan_resync."""
+    plan = plan_resync(sheet_rows, replayed, known_tweet_ids)
+    return plan.prune, plan.also_updates
 
 
 async def _prune_sheet(args: argparse.Namespace) -> list[OfferRecord]:
-    """--prune-sheet: re-checks the sheet against the current rules. Counts
-    only are printed. With --apply, pruned rows are moved to the 'pruned'
-    tab (copied there first, then removed from 'offers')."""
+    """--prune-sheet: re-checks the sheet against the current rules using a
+    --dump-raw file. Counts only are printed. With --apply: pruned rows are
+    moved to the 'pruned' tab (copied there first, then removed from
+    'offers'), and events the current rules find that the sheet lacks are
+    added."""
     schools_cfg = load_schools()
     school_handles = _all_school_handles(schools_cfg)
     raw_tweets = _read_jsonl(args.prune_sheet)
@@ -439,28 +491,31 @@ async def _prune_sheet(args: argparse.Namespace) -> list[OfferRecord]:
         env("GOOGLE_SERVICE_ACCOUNT_JSON", required=True), env("SHEET_ID", required=True)
     )
     sheet_rows = sheets.read_rows(ws)
-    in_sheet = {row.get("tweet_id") for _, row in sheet_rows}
-    replayed, *_ = await _replay(
-        [rt for rt in raw_tweets if rt.get("id") in in_sheet], schools_cfg, school_handles
-    )
-    prune, also_updates = plan_prune(sheet_rows, replayed, known_ids)
+    replayed, *_ = await _replay(raw_tweets, schools_cfg, school_handles)
+    plan = plan_resync(sheet_rows, replayed, known_ids)
 
-    rejected = sum(1 for *_, reason in prune if reason.startswith("rejected"))
+    rejected = sum(1 for *_, reason in plan.prune if reason.startswith("rejected"))
     unchecked = sum(1 for _, row in sheet_rows if row.get("tweet_id") not in known_ids)
     print(
-        f"prune_sheet: rows={len(sheet_rows)} to_prune={len(prune)} "
-        f"(rejected={rejected} duplicates={len(prune) - rejected}) "
-        f"also_reported_by_updates={len(also_updates)} not_in_raw_file={unchecked}"
+        f"prune_sheet: rows={len(sheet_rows)} to_prune={len(plan.prune)} "
+        f"(rejected={rejected} duplicates={len(plan.prune) - rejected}) "
+        f"to_add={len(plan.adds)} also_reported_by_updates={len(plan.also_updates)} "
+        f"key_updates={len(plan.key_updates)} not_in_raw_file={unchecked}"
     )
     if not args.apply:
-        print("prune_sheet: report only - rerun with --apply to move these rows to the 'pruned' tab")
-        return []
+        print("prune_sheet: report only - rerun with --apply to make these changes")
+        return plan.adds
 
-    if also_updates:
-        sheets.update_also_reported_by(ws, also_updates)
-    sheets.move_to_pruned(ws, prune, dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"))
-    print(f"prune_sheet: moved {len(prune)} rows to the 'pruned' tab")
-    return []
+    # Cell updates first: pruning deletes rows, which shifts row numbers.
+    if plan.also_updates:
+        sheets.update_column(ws, "also_reported_by", plan.also_updates)
+    if plan.key_updates:
+        sheets.update_column(ws, "event_key", plan.key_updates)
+    sheets.move_to_pruned(ws, plan.prune, dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"))
+    if plan.adds:
+        sheets.append_at_column_a(ws, [r.as_row() for r in plan.adds])
+    print(f"prune_sheet: moved {len(plan.prune)} rows to the 'pruned' tab, added {len(plan.adds)} rows")
+    return plan.adds
 
 
 async def _run_from_raw(args: argparse.Namespace) -> list[OfferRecord]:
@@ -562,7 +617,8 @@ async def run(argv: list[str] | None = None) -> list[OfferRecord]:
         else resolve_max_pages(args.max_pages, is_backfill)
     )
     limit = search_limit(max_pages)
-    plan = search_plan(schools_cfg, since_days, args.backfill_days, args.resume_from_slice)
+    search_schools = select_schools(schools_cfg, args.only_schools)
+    plan = search_plan(search_schools, since_days, args.backfill_days, args.resume_from_slice)
 
     api = await build_api(cookies_text)
     profile_cache: dict[str, dict] = {}

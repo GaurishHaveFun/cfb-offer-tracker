@@ -91,3 +91,17 @@ def test_unrelated_events_stay_separate():
     b = _record(tweet_id="2", school="Ohio State", player_handle="other_guy", player_name="Other Guy")
     result = dedupe_events([a, b])
     assert len(result) == 2
+
+
+
+def test_reporter_name_and_player_handle_are_one_event():
+    from cfb_offers.dedupe import canonical_key
+    known = {"fake_player28|ole miss|commit"}
+    assert canonical_key("fake player|ole miss|commit", known) == "fake_player28|ole miss|commit"
+    # different school or event: not merged
+    assert canonical_key("fake player|auburn|commit", known) == "fake player|auburn|commit"
+    assert canonical_key("fake player|ole miss|offer", known) == "fake player|ole miss|offer"
+    # short/generic names never merge
+    assert canonical_key("al bo|ole miss|commit", {"albo_fan|ole miss|commit"}) == "al bo|ole miss|commit"
+    # handle keys are left as they are
+    assert canonical_key("fake_player28|ole miss|commit", known) == "fake_player28|ole miss|commit"

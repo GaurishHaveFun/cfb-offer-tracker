@@ -43,3 +43,21 @@ def test_backfill_days_refuses_to_run_in_ci(monkeypatch):
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     with pytest.raises(SystemExit):
         asyncio.run(main.run(["--backfill-days", "90"]))
+
+
+
+def test_only_schools_narrows_searches_case_insensitively(schools):
+    picked = main.select_schools(schools, "auburn, Ole Miss")
+    assert [s.name for s in picked] == ["Auburn", "Ole Miss"]
+    plan = main.search_plan(picked, 90, 90)
+    assert plan and all("Auburn" in q or "Ole Miss" in q for _, q in plan)
+    assert not any("Alabama" in q for _, q in plan)
+
+
+def test_only_schools_rejects_unknown_names(schools):
+    with pytest.raises(SystemExit):
+        main.select_schools(schools, "Auburn,Hogwarts")
+
+
+def test_no_filter_means_every_school(schools):
+    assert main.select_schools(schools, None) == schools

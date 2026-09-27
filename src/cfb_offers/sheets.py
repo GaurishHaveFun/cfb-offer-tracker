@@ -15,7 +15,9 @@ import gspread
 import requests
 from gspread.exceptions import APIError, WorksheetNotFound
 
-from cfb_offers.dedupe import add_source
+from dataclasses import replace
+
+from cfb_offers.dedupe import add_source, canonical_key
 from cfb_offers.models import OfferRecord
 
 HEADER = OfferRecord.columns()
@@ -218,6 +220,9 @@ def sync_records(ws: gspread.Worksheet, records: list[OfferRecord]) -> tuple[int
     also_updates: list[dict] = []  # {"range": "H5", "values": [["a, b"]]}
     updated = 0
     for record in records:
+        key = canonical_key(record.event_key, existing.keys())
+        if key != record.event_key:
+            record = replace(record, event_key=key)
         row_num = existing.get(record.event_key)
         if row_num is None:
             to_append.append(record.as_row())
@@ -303,14 +308,18 @@ def _pruned_worksheet(ws: gspread.Worksheet) -> gspread.Worksheet:
     return pruned
 
 
-def update_also_reported_by(ws: gspread.Worksheet, updates: dict[int, str]) -> None:
-    """Sets also_reported_by on the given rows ({row_number: value}) in one batch."""
-    col = HEADER.index("also_reported_by") + 1
+def update_column(ws: gspread.Worksheet, column: str, updates: dict[int, str]) -> None:
+    """Sets `column` on the given rows ({row_number: value}) in one batch."""
+    col = HEADER.index(column) + 1
     data = [
         {"range": gspread.utils.rowcol_to_a1(row_num, col), "values": [[value]]}
         for row_num, value in updates.items()
     ]
     _with_retry(ws.batch_update, data, value_input_option="RAW")
+
+
+def update_also_reported_by(ws: gspread.Worksheet, updates: dict[int, str]) -> None:
+    update_column(ws, "also_reported_by", updates)
 
 
 def move_to_pruned(

@@ -146,7 +146,13 @@ X_COOKIES="$(cat x_cookies.txt)" GOOGLE_SERVICE_ACCOUNT_JSON="$(cat sa.json)" SH
 With `--apply`, rejected rows and duplicate reports of the same event are
 **moved to a `pruned` tab** (with `pruned_at` and `prune_reason` columns),
 never just deleted - a row is only removed from `offers` after it has been
-copied. Rows whose tweets aren't in the raw file are left alone. Stop any
+copied. Events the current rules find in the raw file that the sheet lacks
+(e.g. a commit re-credited to the right school, or a newly tracked school)
+are **added**. Rows whose tweets aren't in the raw file are left alone.
+
+To backfill only some schools (e.g. after adding new ones to
+`config/schools.yaml`), add `--only-schools "Auburn,Ole Miss"` to a
+`--backfill-days` run. Stop any
 running scrape first so the two don't edit the sheet at the same time.
 
 ## Local development

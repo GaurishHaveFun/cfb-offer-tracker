@@ -4,7 +4,7 @@ import pytest
 from gspread.exceptions import WorksheetNotFound
 
 from cfb_offers import sheets
-from cfb_offers.main import plan_prune
+from cfb_offers.main import plan_prune, plan_resync
 from cfb_offers.models import OfferRecord
 
 
@@ -113,3 +113,34 @@ def test_rows_are_not_deleted_if_copying_to_pruned_tab_fails():
     with pytest.raises(RuntimeError):
         sheets.move_to_pruned(FakeOffersTab(sh), [(2, _row("1"), "rejected")], "now")
     assert sh.batches == []
+
+
+def test_wrong_school_row_is_pruned_and_the_corrected_one_added():
+    # the sheet credited the commit to Penn State; current rules say Auburn
+    rows = [(2, _row("1", school="Penn State", key="fake player|penn state|commit"))]
+    fixed = _rec("1", school="Auburn", key="fake player|auburn|commit")
+    plan = plan_resync(rows, [fixed], known_tweet_ids={"1"})
+    assert [(n, reason) for n, _, reason in plan.prune] == [(2, "rejected by current rules")]
+    assert [r.event_key for r in plan.adds] == ["fake player|auburn|commit"]
+
+
+def test_events_missing_from_the_sheet_are_added_once():
+    rows = [(2, _row("1", key="fake player|alabama|commit"))]
+    replayed = [_rec("1"), _rec("2", school="Kentucky", event_type="offer", key="other|kentucky|offer"),
+                _rec("3", school="Kentucky", event_type="offer", key="other|kentucky|offer")]
+    plan = plan_resync(rows, replayed, known_tweet_ids={"1", "2", "3"})
+    assert plan.prune == []
+    assert [(r.event_key, r.tweet_id) for r in plan.adds] == [("other|kentucky|offer", "2")]  # earliest report
+
+
+def test_kept_rows_get_the_current_event_key():
+    rows = [(2, _row("1", key="rivals|alabama|commit"))]
+    plan = plan_resync(rows, [_rec("1")], known_tweet_ids={"1"})
+    assert plan.key_updates == {2: "fake player|alabama|commit"}
+    assert plan.adds == []  # the kept row covers the event under its new key
+
+
+def test_rows_not_in_raw_file_block_duplicate_adds():
+    rows = [(2, _row("9", key="fake player|alabama|commit"))]
+    plan = plan_resync(rows, [_rec("1")], known_tweet_ids={"1"})
+    assert plan.adds == []

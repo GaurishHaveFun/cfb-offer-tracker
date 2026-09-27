@@ -36,12 +36,49 @@ def add_source(also_reported_by: str, new_handle: str) -> str:
     return ", ".join(existing)
 
 
+def _alnum(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+# Names shorter than this (letters only) are too generic to match a handle.
+_MIN_NAME_LETTERS = 6
+
+
+def canonical_key(key: str, known_keys) -> str:
+    """Maps a name-based key ("braylen bedford|ole miss|commit", from a
+    reporter post with no @handle) onto a handle-based key for the same
+    school and event whose handle spells out the name
+    ("braylen_bedford|ole miss|commit", from the player's own post), so both
+    reports are one event. Handle-based keys are returned unchanged."""
+    identity, _, rest = key.partition("|")
+    if " " not in identity:  # handles never contain spaces
+        return key
+    name = _alnum(identity)
+    if len(name) < _MIN_NAME_LETTERS:
+        return key
+    for other in known_keys:
+        other_identity, _, other_rest = other.partition("|")
+        if other_rest == rest and " " not in other_identity and name in _alnum(other_identity):
+            return other
+    return key
+
+
+def canonicalize(records: list[OfferRecord]) -> list[OfferRecord]:
+    handle_keys = {r.event_key for r in records if " " not in r.event_key.partition("|")[0]}
+    out = []
+    for r in records:
+        key = canonical_key(r.event_key, handle_keys)
+        out.append(r if key == r.event_key else replace(r, event_key=key))
+    return out
+
+
 def dedupe_events(records: list[OfferRecord]) -> list[OfferRecord]:
-    """One row per event_key: the earliest tweet is kept as the row, and every
-    other source's handle is folded into `also_reported_by`.
+    """One row per event: the earliest tweet is kept as the row, and every
+    other source's handle is folded into `also_reported_by`. A reporter's
+    name-only report and the player's own post merge (see canonical_key).
     """
     groups: dict[str, list[OfferRecord]] = {}
-    for r in records:
+    for r in canonicalize(records):
         groups.setdefault(r.event_key, []).append(r)
 
     result = []
