@@ -9,8 +9,10 @@ a loud failure when no account is left active (stale/invalid cookies).
 from __future__ import annotations
 
 import asyncio
+import atexit
 import os
 import random
+import shutil
 import tempfile
 
 from twscrape import API, AccountsPool
@@ -91,7 +93,10 @@ async def build_api(
     tempdir (never the repo) unless `db_path` is given explicitly.
     """
     if db_path is None:
-        db_path = os.path.join(tempfile.mkdtemp(prefix="cfb-offers-"), "accounts.db")
+        tmp_dir = tempfile.mkdtemp(prefix="cfb-offers-")
+        # Removed on exit so every run doesn't leave a temp dir behind.
+        atexit.register(shutil.rmtree, tmp_dir, ignore_errors=True)
+        db_path = os.path.join(tmp_dir, "accounts.db")
 
     api = API(db_path, wait_timeout=wait_timeout)
     await add_accounts(api.pool, cookies_text)
