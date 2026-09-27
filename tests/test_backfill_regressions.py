@@ -217,3 +217,37 @@ def test_shared_nickname_counts_only_when_school_is_named(schools):
     assert schools_of(named, schools) == [("offer", "Georgia")]
     unnamed = "Blessed to receive an offer from the McFake College Bulldogs! 🏈"
     assert schools_of(unnamed, schools) == []
+
+
+# --- branch campuses and state-named colleges -------------------------------
+
+def test_branch_campuses_and_state_named_colleges_are_rejected(schools):
+    for text in [
+        "Blessed to receive an offer from Texas A&M-Kingsville 🏈",
+        "Blessed to receive an offer from Texas A&M University–Kingsville 🏈",
+        "Blessed to receive an offer from Texas A&M (Kingsville) 🏈",
+        "Blessed to receive an offer from Texas A&M Corpus Christi 🏈",
+        "Blessed to receive an offer from Texas College 🏈",
+        "Blessed to receive an offer from the University of Texas Permian Basin 🏈",
+        "Blessed to receive an offer from the University of Alabama at Birmingham 🏈",
+        "Blessed to receive an offer from Indiana Wesleyan University 🏈",
+        "Blessed to receive an offer from Miami Ohio 🏈",
+        "Blessed to receive an offer from Tennessee-Martin 🏈",
+        "Blessed to receive an offer from UNC Greensboro 🏈",
+        "Blessed to receive an offer from Oklahoma Panhandle State 🏈",
+        "Blessed to receive an offer from the Georgia Knights 🏈",
+        "Blessed to receive an offer from Michigan Technological University 🏈",
+    ]:
+        assert schools_of(text, schools) == [], text
+
+
+def test_the_tracked_schools_themselves_still_match(schools):
+    for text, school in [
+        ("Blessed to receive an offer from Texas A&M University! #GigEm 🏈", "Texas A&M"),
+        ("Blessed to receive an offer from the University of Texas at Austin 🏈", "Texas"),
+        ("Blessed to receive an offer from the University of Alabama 🏈", "Alabama"),
+        ("Blessed to receive an offer from the Georgia Institute of Technology 🏈", "Georgia Tech"),
+        ("Blessed to receive an offer from Miami 🏈", "Miami (FL)"),
+        ("Blessed to receive an offer from the University of Tennessee 🏈", "Tennessee"),
+    ]:
+        assert schools_of(text, schools) == [("offer", school)], text

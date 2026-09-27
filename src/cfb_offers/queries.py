@@ -112,6 +112,11 @@ def _with_negatives(prefix: str, suffix: str, max_len: int = MAX_QUERY_LEN) -> s
     return f"{prefix} {suffix}"
 
 
+# Room kept in every group for the highest-priority negative term, so e.g.
+# "-basketball" always fits however long a group's aliases are.
+_FIRST_NEGATIVE_ROOM = len(" " + NEGATIVE_SPORT_TERMS[0])
+
+
 def group_schools(
     schools: list[School], since_days: int, max_len: int = MAX_QUERY_LEN
 ) -> list[list[School]]:
@@ -124,7 +129,7 @@ def group_schools(
     current: list[School] = []
     for school in schools:
         candidate = current + [school]
-        if current and len(_base_query_for_group(candidate, since_days)) > max_len:
+        if current and len(_base_query_for_group(candidate, since_days)) + _FIRST_NEGATIVE_ROOM > max_len:
             groups.append(current)
             current = [school]
         else:

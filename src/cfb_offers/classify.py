@@ -136,6 +136,26 @@ SCHOOL_REJECT_SUFFIXES = [
     # "Auburn Montgomery", "Missouri Western", and high schools named after
     # a town/state ("Auburn High School").
     "Pine Bluff", "Little Rock", "Montgomery", "Western", "High",
+    # Other colleges that start with a tracked state name: "Texas College",
+    # "Indiana Wesleyan", "Texas Lutheran", "Michigan Technological",
+    # "Georgia Knights" (7v7), "Georgia Institute of Technology" (that's
+    # Georgia Tech - matched by its own alias), "Miami Ohio",
+    # "Oklahoma Panhandle State".
+    "College", "Wesleyan", "Lutheran", "Technological", "Knights", "Institute",
+    "Ohio", "Panhandle", "Gulf Coast", "Mountain",
+]
+
+# Branch campuses of a tracked name, which may be joined by a dash, "at" or
+# "University": "Texas A&M-Kingsville", "Texas A&M University–Kingsville",
+# "University of Alabama at Birmingham", "Texas A&M (Corpus Christi)".
+SCHOOL_REJECT_CAMPUSES = [
+    "Kingsville", "Corpus Christi", "Galveston", "Commerce", "Texarkana",
+    "San Antonio", "International", "Central Texas", "Permian Basin", "Tyler",
+    "El Paso", "Arlington", "Dallas", "Rio Grande Valley", "Birmingham",
+    "Huntsville", "Martin", "Chattanooga", "Knoxville", "Greensboro",
+    "Asheville", "Charlotte", "Wilmington", "Pembroke", "Pembrooke",
+    "Beaufort", "Aiken", "Upstate", "Fort Smith", "Monticello", "Kokomo",
+    "Southeast", "East",
 ]
 
 # --- non-football sport signals ---------------------------------------------
@@ -260,13 +280,20 @@ def _suffix_pattern(phrase: str) -> str:
 _PREFIX_ALT = "|".join(re.escape(p) for p in SCHOOL_REJECT_PREFIXES)
 _PREFIX_RE = re.compile(rf"\b(?:{_PREFIX_ALT})[\s-]*$", re.IGNORECASE)
 _SUFFIX_ALT = "|".join(_suffix_pattern(s) for s in SCHOOL_REJECT_SUFFIXES)
-_SUFFIX_RE = re.compile(rf"^[\s-]*(?:{_SUFFIX_ALT})\b", re.IGNORECASE)
+_SUFFIX_RE = re.compile(rf"^[\s\-\u2013\u2014(/]*(?:{_SUFFIX_ALT})\b", re.IGNORECASE)
+_CAMPUS_ALT = "|".join(_suffix_pattern(s) for s in SCHOOL_REJECT_CAMPUSES)
+_CAMPUS_RE = re.compile(
+    rf"^(?:[\s\-\u2013\u2014(/,]|\bat\b|\buniversity\b|\buniv\b\.?)*(?:{_CAMPUS_ALT})\b",
+    re.IGNORECASE,
+)
 
 
 def _is_rejected_context(text: str, start: int, end: int) -> bool:
     if _PREFIX_RE.search(text[:start]):
         return True
     if _SUFFIX_RE.search(text[end:]):
+        return True
+    if _CAMPUS_RE.search(text[end:]):
         return True
     return False
 

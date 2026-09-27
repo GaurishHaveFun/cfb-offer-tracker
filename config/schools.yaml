@@ -110,7 +110,7 @@ schools:
   - name: Georgia Tech
     # Bare "GT" deliberately excluded - too short/ambiguous (40-times, car
     # trims, etc.) to trust as a standalone alias.
-    aliases: ["Georgia Tech", "Yellow Jackets", "@GeorgiaTechFB"]
+    aliases: ["Georgia Tech", "Georgia Institute of Technology", "Yellow Jackets", "@GeorgiaTechFB"]
     handles: ["GeorgiaTechFB"]  # verify
     coach_handles: []
   - name: Georgia State
