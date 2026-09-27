@@ -1,8 +1,8 @@
 # CFB Offer Tracker
 
 Scrapes X/Twitter every 6 hours for high-school football players announcing
-**offers, commitments, and decommitments** (including flips) from 26
-CFB programs, parses the player's bio, dedupes multi-source
+**offers, commitments, and decommitments** (including flips) from 34
+CFB programs (including all 16 SEC schools), parses the player's bio, dedupes multi-source
 reports into one row per event, and appends new rows to a private Google
 Sheet.
 
