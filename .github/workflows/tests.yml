@@ -27,3 +27,12 @@ jobs:
 
       - name: Run tests
         run: pytest
+
+      # The scrape workflow uses a regular `pip install .` (package lands in
+      # site-packages, not the checkout), which unit tests under an editable
+      # install can't catch - e.g. config/schools.yaml not being found.
+      - name: Smoke-test a regular install, like the scrape workflow
+        run: |
+          python -m venv /tmp/plain
+          /tmp/plain/bin/pip install -q .
+          /tmp/plain/bin/python -c "from cfb_offers.config import load_schools; from cfb_offers.queries import build_all_queries; s = load_schools(); print(len(s), 'schools,', len(build_all_queries(s, 3)), 'searches')"
