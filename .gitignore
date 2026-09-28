@@ -19,3 +19,8 @@ x_cookies.txt
 .DS_Store
 .idea/
 .vscode/
+
+# local scheduled runs (scripts/run_scheduled.sh)
+logs/
+runs/
+sheet_id.txt

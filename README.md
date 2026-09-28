@@ -114,6 +114,22 @@ long enough that you should expect at least one rate-limit wait unless you
 add more than one cookie line to `X_COOKIES` — each additional account
 gives twscrape somewhere else to rotate to instead of waiting.
 
+### Running on a schedule (Mac)
+
+X blocks searches coming from cloud/CI servers (GitHub Actions gets HTTP
+403), so the every-6-hours scrape runs on a Mac from a home connection:
+
+```
+echo "<your sheet id>" > sheet_id.txt      # gitignored, next to x_cookies.txt and sa.json
+scripts/install_mac_schedule.sh            # installs a launchd job: 00:17, 06:17, 12:17, 18:17
+```
+
+Each run appends to `logs/scrape.log`, saves its tweets to `runs/` (kept 60
+days, for `--prune-sheet`), and shows a macOS notification if it fails. Runs
+missed while the Mac is asleep run once when it wakes; the next run's window
+starts from the newest tweet already in the sheet, so nothing is skipped.
+The GitHub `scrape.yml` workflow is manual-only.
+
 ### Position and "7 states" tabs
 
 `offers` is the main tab the scraper writes to. To add read-only views of

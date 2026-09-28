@@ -1,10 +1,9 @@
 name: Scrape CFB offers
 
+# No schedule: X answers searches from GitHub's (data-center) IPs with 403,
+# so the every-6-hours run happens on a Mac instead - see
+# scripts/install_mac_schedule.sh. Manual runs stay available for testing.
 on:
-  schedule:
-    # Staggered off the top of the hour - GitHub delays jobs scheduled
-    # exactly on the hour when the queue is busy.
-    - cron: "17 */6 * * *"
   workflow_dispatch:
     inputs:
       since_days:
