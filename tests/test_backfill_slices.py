@@ -45,6 +45,14 @@ def test_backfill_days_refuses_to_run_in_ci(monkeypatch):
         asyncio.run(main.run(["--backfill-days", "90"]))
 
 
+def test_self_hosted_runner_is_not_ci(monkeypatch):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("RUNNER_ENVIRONMENT", "self-hosted")
+    assert not main.is_ci()
+    monkeypatch.setenv("RUNNER_ENVIRONMENT", "github-hosted")
+    assert main.is_ci()
+
+
 
 def test_only_schools_narrows_searches_case_insensitively(schools):
     picked = main.select_schools(schools, "auburn, Ole Miss")
