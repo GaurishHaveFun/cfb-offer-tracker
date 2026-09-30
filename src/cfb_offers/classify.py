@@ -351,7 +351,7 @@ def _from_handle_is_unofficial(text: str, schools: list[School]) -> bool:
         return False
     handle = m.group(1).lower()
     official = {
-        h.lstrip("@").lower() for s in schools for h in (s.handles + s.coach_handles)
+        h.lstrip("@").lower() for s in schools for h in s.mention_handles
     }
     return handle not in official
 
@@ -388,7 +388,7 @@ def match_schools(text: str, schools: list[School]) -> list[str]:
     """Names of every school matched in `text`, in schools-list order.
 
     - @mentions count only for a school whose configured handles/coach_handles
-      contain that exact (case-insensitive) handle.
+      or "@..." aliases contain that exact (case-insensitive) handle.
     - hashtag aliases (e.g. "#RollTide") match literally, since they're
       explicitly listed as aliases - unless the tweet explicitly names its
       offering source as "from @some-unofficial-handle", in which case a
@@ -405,7 +405,7 @@ def match_schools(text: str, schools: list[School]) -> list[str]:
 
     matched = []
     for school in schools:
-        handles = {h.lstrip("@").lower() for h in (school.handles + school.coach_handles)}
+        handles = {h.lstrip("@").lower() for h in school.mention_handles}
         if mentions & handles:
             matched.append(school.name)
             continue

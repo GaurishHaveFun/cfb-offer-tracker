@@ -8,7 +8,7 @@ follow the pattern @Recruit2027QB / "Recruit Name".
 """
 import asyncio
 
-from cfb_offers.classify import classify_tweet, match_schools
+from cfb_offers.classify import classify_tweet, is_school_account, match_schools
 from cfb_offers.main import process_tweet
 from cfb_offers.profile import parse_class_year, parse_position
 from cfb_offers.sources import classify_author
@@ -79,6 +79,25 @@ def test_mention_counts_only_for_configured_handle(schools):
 def test_official_handle_mention_matches_even_without_plain_text_alias(schools):
     text = "So blessed to receive this offer! Thank you coach! 🏈 @AlabamaFTBL"
     assert match_schools(text, schools) == ["Alabama"]
+
+
+def test_at_alias_mention_matches_school(schools):
+    # Khayel Sam Fong-Talia, 2026-09-02: tagged only @UMich (an "@..." alias,
+    # not a configured football handle) and never wrote "Michigan".
+    text = (
+        "After a BLESSED conversation with Coach @UMFBCoachWhitt & @COACHKDJR "
+        "i\u2019m grateful to receive an offer from @UMich!!\U0001f535\U0001f7e1\n\n"
+        "@SFHS_Football @COACH_THOMSON @TomLoy247 @Andrew_Ivins @adamgorney"
+    )
+    bio = "C/O: 2029 South Forsyth HS | GPA: 4.00 | POS: Dual Threat QB | HT: 6'2 | WT: 227lbs"
+    assert match_schools(text, schools) == ["Michigan"]
+    ev = classify_tweet(text, schools, bio=bio)
+    assert [(e.school, e.event_type) for e in ev] == [("Michigan", "offer")]
+
+
+def test_at_alias_is_not_a_school_account(schools):
+    # Aliases name the school; only `handles` are the school's own accounts.
+    assert not is_school_account("UMich", schools)
 
 
 # ---------------------------------------------------------------------------

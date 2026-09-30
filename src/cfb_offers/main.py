@@ -189,7 +189,7 @@ def resolve_max_pages(explicit_max_pages: int | None, is_backfill: bool) -> int:
 
 
 def _all_school_handles(schools_cfg: list[School]) -> list[str]:
-    return [h for s in schools_cfg for h in s.handles]
+    return [h for s in schools_cfg for h in s.mention_handles]
 
 
 async def _resolve_player_profile(api, cache: dict, handle: str, name: str) -> dict:

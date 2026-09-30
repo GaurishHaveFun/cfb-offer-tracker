@@ -42,6 +42,15 @@ class School:
     # main alias somewhere ("on Georgia's radar ... an offer from the Bulldogs").
     context_aliases: tuple[str, ...] = ()
 
+    @property
+    def mention_handles(self) -> list[str]:
+        """Every @handle that names this school when tagged: its football and
+        coach handles plus any "@..." alias ("@UMich"). Aliases are only
+        search terms and names, so they never make an account the school's
+        own (see is_school_account)."""
+        at_aliases = [a for a in self.aliases if a.startswith("@")]
+        return [*self.handles, *self.coach_handles, *at_aliases]
+
 
 def load_schools(path: str | Path | None = None) -> list[School]:
     data = yaml.safe_load(Path(path or find_schools_path()).read_text())
