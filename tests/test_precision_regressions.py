@@ -82,14 +82,14 @@ def test_official_handle_mention_matches_even_without_plain_text_alias(schools):
 
 
 def test_at_alias_mention_matches_school(schools):
-    # Khayel Sam Fong-Talia, 2026-09-02: tagged only @UMich (an "@..." alias,
-    # not a configured football handle) and never wrote "Michigan".
+    # A real 2026 offer post tagged only @UMich (an "@..." alias, not a
+    # configured football handle) and never wrote "Michigan".
     text = (
-        "After a BLESSED conversation with Coach @UMFBCoachWhitt & @COACHKDJR "
+        "After a BLESSED conversation with Coach @CoachFakeOne & @CoachFakeTwo "
         "i\u2019m grateful to receive an offer from @UMich!!\U0001f535\U0001f7e1\n\n"
-        "@SFHS_Football @COACH_THOMSON @TomLoy247 @Andrew_Ivins @adamgorney"
+        "@FakeHS_Football @TomLoy247 @adamgorney"
     )
-    bio = "C/O: 2029 South Forsyth HS | GPA: 4.00 | POS: Dual Threat QB | HT: 6'2 | WT: 227lbs"
+    bio = "C/O: 2029 Fake HS | POS: Dual Threat QB | HT: 6'2 | WT: 220lbs"
     assert match_schools(text, schools) == ["Michigan"]
     ev = classify_tweet(text, schools, bio=bio)
     assert [(e.school, e.event_type) for e in ev] == [("Michigan", "offer")]
