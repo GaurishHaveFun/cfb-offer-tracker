@@ -58,15 +58,13 @@ for exactly how to add the three secrets, trigger and watch a manual run,
 what a failure email means (usually expired cookies) and how to fix it, and
 GitHub's 60-day scheduled-workflow inactivity rule.
 
-Actions runs never do the 30-day backfill — a scheduled run is capped at 30
-minutes, which isn't enough headroom for a burner account to safely clear a
-30-day window across every query. Instead, a scheduled run only looks back
+The scheduled scrape runs on a **self-hosted runner on a Mac at home**, not
+on GitHub's servers (X answers searches from GitHub's IPs with 403) — see
+**[docs/self-hosted-runner.md](docs/self-hosted-runner.md)** for installing
+the runner and the protections this public repo needs. Each run looks back
 to the last row's tweet date (with a day of overlap — dedupe handles the
-repeats), and if the sheet is still empty or that gap is larger than 3 days
-it's clamped to 3 days, with a counts-only warning in the Actions log
-telling you to run the backfill locally (see below). **Run the one-time
-30-day backfill locally before turning on the schedule**, so the sheet
-isn't stuck re-clamping to 3 days forever.
+repeats). **Run the one-time 30-day backfill locally before turning on the
+schedule.**
 
 To rotate between multiple burner accounts (recommended — twscrape falls
 back to another account when one hits a rate limit instead of just waiting,
@@ -116,19 +114,16 @@ gives twscrape somewhere else to rotate to instead of waiting.
 
 ### Running on a schedule (Mac)
 
-X blocks searches coming from cloud/CI servers (GitHub Actions gets HTTP
-403), so the every-6-hours scrape runs on a Mac from a home connection:
+The every-6-hours scrape is `scrape.yml` on a self-hosted GitHub Actions
+runner on a Mac at home — see
+**[docs/self-hosted-runner.md](docs/self-hosted-runner.md)**. Each run saves
+its tweets on that Mac under `~/cfb-offer-tracker-data/runs/` (kept 60 days,
+for `--prune-sheet`).
 
-```
-echo "<your sheet id>" > sheet_id.txt      # gitignored, next to x_cookies.txt and sa.json
-scripts/install_mac_schedule.sh            # installs a launchd job: 00:17, 06:17, 12:17, 18:17
-```
-
-Each run appends to `logs/scrape.log`, saves its tweets to `runs/` (kept 60
-days, for `--prune-sheet`), and shows a macOS notification if it fails. Runs
-missed while the Mac is asleep run once when it wakes; the next run's window
-starts from the newest tweet already in the sheet, so nothing is skipped.
-The GitHub `scrape.yml` workflow is manual-only.
+`scripts/install_mac_schedule.sh` is the older way: a launchd job that runs
+`scripts/run_scheduled.sh` with the secrets in local gitignored files
+(`x_cookies.txt`, `sa.json`, `sheet_id.txt`). Use one or the other, never
+both, so two scrapers don't edit the sheet at once.
 
 ### Position and "7 states" tabs
 

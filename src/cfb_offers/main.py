@@ -136,7 +136,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def is_ci() -> bool:
-    return env("GITHUB_ACTIONS") == "true"
+    """True on a GitHub-hosted runner, whose 30-minute job cap is why CI runs
+    are clamped. A self-hosted runner (the home Mac) has no such cap and runs
+    like the local launchd job did, so it doesn't count."""
+    return env("GITHUB_ACTIONS") == "true" and env("RUNNER_ENVIRONMENT") != "self-hosted"
 
 
 def resolve_window(

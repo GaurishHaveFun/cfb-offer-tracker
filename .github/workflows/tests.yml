@@ -9,6 +9,9 @@ permissions:
 
 jobs:
   test:
+    # Must stay on GitHub-hosted runners: this workflow runs on pull
+    # requests, and pull requests from anyone must never run on the
+    # self-hosted Mac (see docs/self-hosted-runner.md).
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

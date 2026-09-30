@@ -2,7 +2,10 @@
 
 This repo runs `.github/workflows/scrape.yml` on a schedule (every 6 hours,
 staggered at `:17` past the hour) plus `workflow_dispatch` for manual runs,
-and `.github/workflows/tests.yml` on every push/PR (no secrets involved).
+on a self-hosted runner on a Mac at home (set that up first:
+[self-hosted-runner.md](self-hosted-runner.md)), and
+`.github/workflows/tests.yml` on every push/PR on GitHub's own runners (no
+secrets involved).
 
 ## 1. Add the three secrets
 
