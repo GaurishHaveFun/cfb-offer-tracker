@@ -33,6 +33,7 @@ PRUNED_HEADER = HEADER + ["pruned_at", "prune_reason"]
 _RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
 _MAX_RETRIES = 5
 _BASE_DELAY_SECONDS = 1.0
+_REQUEST_TIMEOUT_SECONDS = 60
 
 
 class SheetSchemaError(RuntimeError):
@@ -77,6 +78,10 @@ def _service_account_email(service_account_json: str) -> str:
 
 
 def _open_worksheet(gc: gspread.Client, sheet_id: str, sa_email: str) -> gspread.Worksheet:
+    # gspread waits forever by default, so a connection that dies mid-request
+    # (e.g. the Mac sleeping) hangs the run. With a timeout it raises a
+    # requests Timeout instead, which _with_retry retries.
+    gc.set_timeout(_REQUEST_TIMEOUT_SECONDS)
     try:
         sh = _with_retry(gc.open_by_key, sheet_id)
     except APIError as e:

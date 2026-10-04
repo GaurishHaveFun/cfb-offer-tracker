@@ -163,6 +163,10 @@ class FakeClient:
         self._spreadsheet = spreadsheet
         self._open_error = open_error
         self.open_calls = 0
+        self.timeout = None
+
+    def set_timeout(self, timeout):
+        self.timeout = timeout
 
     def open_by_key(self, sheet_id):
         self.open_calls += 1
@@ -345,6 +349,18 @@ def test_check_sheet_passes_and_prints_counts(monkeypatch, capsys):
     assert ws.delete_rows_calls
 
 
+def test_open_sheet_sets_request_timeout(monkeypatch):
+    # Without a timeout, a connection that dies mid-request hangs the run
+    # forever, and launchd then skips every later scheduled run.
+    ws = FakeWorksheet(rows=[sheets.HEADER])
+    client = FakeClient(FakeSpreadsheet(ws))
+    _patch_client(monkeypatch, client)
+
+    sheets.open_sheet(SA_JSON, "sheet123")
+
+    assert client.timeout == sheets._REQUEST_TIMEOUT_SECONDS
+
+
 def test_blank_header_cell_is_restored_not_fatal():
     blanked = [""] + sheets.HEADER[1:]
     ws = FakeWorksheet(rows=[blanked, ["k1"] + [""] * (len(sheets.HEADER) - 1)])
@@ -364,6 +380,7 @@ def test_dropped_connection_is_retried(monkeypatch):
     ws = FakeWorksheet(rows=[sheets.HEADER])
     ws.fail_next("get_all_values", requests.exceptions.ConnectionError("Connection reset by peer"), times=2)
     assert sheets.load_existing_event_keys(ws) == {}
+
 
 
 def test_renamed_header_labels_are_accepted():

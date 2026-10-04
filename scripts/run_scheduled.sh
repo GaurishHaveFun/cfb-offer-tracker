@@ -20,8 +20,16 @@ done
 X_COOKIES="$(cat x_cookies.txt)" \
 GOOGLE_SERVICE_ACCOUNT_JSON="$(cat sa.json)" \
 SHEET_ID="$(tr -d '[:space:]' < sheet_id.txt)" \
-  .venv/bin/python -m cfb_offers --max-pages 5 --dump-raw "runs/$(date +%Y%m%d-%H%M).jsonl"
+  .venv/bin/python -m cfb_offers --max-pages 5 --dump-raw "runs/$(date +%Y%m%d-%H%M).jsonl" &
+pid=$!
+# launchd skips every later run while this one is alive, so a hung scrape
+# would silently stop the schedule. Kill it after 45 minutes (macOS has no
+# `timeout`).
+( sleep 2700 && kill $pid 2>/dev/null && echo "=== killed after 45 min" ) &
+watchdog=$!
+wait $pid
 code=$?
+pkill -P $watchdog 2>/dev/null; kill $watchdog 2>/dev/null
 
 if (( code == 0 )); then
   echo "=== $(date '+%Y-%m-%d %H:%M:%S') ok"

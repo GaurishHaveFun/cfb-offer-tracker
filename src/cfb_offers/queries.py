@@ -27,9 +27,12 @@ from cfb_offers.config import School
 
 MAX_QUERY_LEN = 500
 
+# Bare "offered" and "new offer" match classify.py's OFFER_PATTERNS; without
+# them X never returns posts like "UGA Offered!!!". They cost extra queries
+# per run (18 -> 27 at 34 schools) since each query fits fewer aliases.
 OFFER_PHRASES = [
     '"offer from"', '"blessed to receive"', '"received an offer"',
-    '"excited to offer"', '"extended an offer"',
+    '"excited to offer"', '"extended an offer"', "offered", '"new offer"',
 ]
 # The bare "committed" phrase matched way too much non-recruiting noise
 # ("committed 19 errors", "committed to protecting families"); every commit
