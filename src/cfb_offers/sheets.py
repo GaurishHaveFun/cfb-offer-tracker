@@ -431,8 +431,8 @@ SEVEN_STATES_TAB = "7 states"
 SEVEN_STATES = ["GA", "NC", "SC", "TN", "AL", "FL", "VA"]
 
 
-def _col(name: str) -> str:
-    return gspread.utils.rowcol_to_a1(1, HEADER.index(name) + 1).rstrip("1")
+def _col(name: str, header: list[str] = HEADER) -> str:
+    return gspread.utils.rowcol_to_a1(1, header.index(name) + 1).rstrip("1")
 
 
 def view_tab_formulas() -> dict[str, str]:
@@ -445,15 +445,19 @@ def view_tab_formulas() -> dict[str, str]:
     state = f"{src}!{_col('state')}2:{_col('state')}"
     key = f"{src}!A2:A"
 
+    # newest tweet first (tweet_date is an ISO string, so text order is date order)
+    date_idx = HEADER.index("tweet_date") + 1
+
+    def view(*conditions: str) -> str:
+        return f'=IFERROR(SORT(FILTER({data}, {", ".join(conditions)}), {date_idx}, FALSE), "")'
+
     def token_match(codes: list[str]) -> str:
         # whole tokens of a "/"-separated list: "OT/OG" matches OL, "C/PF" can't
         return f'REGEXMATCH(UPPER({pos}), "(^|[/ ,])({"|".join(codes)})($|[/ ,])")'
 
-    formulas = {tab: f'=IFERROR(FILTER({data}, {token_match(codes)}), "")' for tab, codes in POSITION_GROUPS.items()}
-    formulas[BLANK_POSITION_TAB] = f'=IFERROR(FILTER({data}, {key}<>"", {pos}=""), "")'
-    formulas[SEVEN_STATES_TAB] = (
-        f'=IFERROR(FILTER({data}, REGEXMATCH(UPPER({state}), "^({"|".join(SEVEN_STATES)})$")), "")'
-    )
+    formulas = {tab: view(token_match(codes)) for tab, codes in POSITION_GROUPS.items()}
+    formulas[BLANK_POSITION_TAB] = view(f'{key}<>""', f'{pos}=""')
+    formulas[SEVEN_STATES_TAB] = view(f'REGEXMATCH(UPPER({state}), "^({"|".join(SEVEN_STATES)})$")')
     return formulas
 
 
@@ -477,6 +481,349 @@ def setup_view_tabs(ws: gspread.Worksheet) -> list[str]:
         _with_retry(tab.freeze, rows=1)
         titles.append(title)
     return titles
+
+
+# --- look and feel ------------------------------------------------------------
+# --setup-tabs also styles the sheet: a Home tab linking to every tab, tab
+# colors by group, colored header rows, alternating row colors, commit /
+# decommit / upcoming-visit highlights, column widths and friendly header
+# labels. Only
+# formatting and the row 1 labels change (labels may be renamed - see
+# _header_cell_ok), never column order or data, so the scraper is unaffected.
+# Re-running replaces the banding, conditional formats and "Newest first"
+# filter view on these tabs instead of stacking duplicates.
+HOME_TAB = "Home"
+NEWEST_FIRST_VIEW = "Newest first"
+
+_OFFENSE, _DEFENSE = "#3C78D8", "#CC0000"
+# {tab: (group, tab color, what's in it)}, in the order the tabs are arranged
+TAB_STYLE: dict[str, tuple[str, str, str]] = {
+    HOME_TAB: ("Start here", "#434343", "This page"),
+    WORKSHEET_NAME: ("All offers", "#1F3864", "Every offer, commit and decommit (the scraper writes here)"),
+    VISITS_WORKSHEET_NAME: ("Visits", "#00838F", "Recruit visits, upcoming and completed (the scraper writes here)"),
+    SEVEN_STATES_TAB: ("Region", "#E69138", "Players from GA, NC, SC, TN, AL, FL and VA"),
+    "QB": ("Offense", _OFFENSE, "Quarterbacks"),
+    "RB": ("Offense", _OFFENSE, "Running backs"),
+    "WR": ("Offense", _OFFENSE, "Wide receivers"),
+    "TE": ("Offense", _OFFENSE, "Tight ends"),
+    "OL": ("Offense", _OFFENSE, "Offensive line (OL, OT, OG, IOL, C)"),
+    "DL": ("Defense", _DEFENSE, "Defensive line (DL, DE, DT, EDGE)"),
+    "LB": ("Defense", _DEFENSE, "Linebackers"),
+    "DB": ("Defense", _DEFENSE, "Defensive backs (DB, CB, S)"),
+    "ATH": ("Athlete", "#674EA7", "Athletes"),
+    "K/P": ("Special teams", "#38761D", "Kickers and punters"),
+    BLANK_POSITION_TAB: ("Needs review", "#7F6000", "Rows with no position listed"),
+    PRUNED_WORKSHEET_NAME: ("Archive", "#999999", "Rows removed by --prune-sheet, with when and why"),
+}
+COMMIT_FILL = "#D9EAD3"
+DECOMMIT_FILL = "#F4CCCC"
+FLIP_TEXT = "#B45F06"
+UPCOMING_FILL = "#FFF2CC"
+# Internal bookkeeping columns, hidden (not removed) to keep rows readable.
+HIDDEN_COLUMNS = ("event_key", "tweet_id", "scraped_at")
+COLUMN_WIDTHS = {
+    "event_type": 90, "is_flip": 60, "school": 130, "player_name": 160,
+    "player_handle": 130, "class_year": 70, "position": 80, "height": 60,
+    "weight": 60, "high_school": 190, "state": 55, "source_type": 90,
+    "source_handle": 130, "tweet_date": 160, "tweet_url": 120,
+    "tweet_text": 420, "also_reported_by": 170, "notes": 220,
+    "pruned_at": 160, "prune_reason": 240, "visit_type": 90, "visit_status": 100,
+}
+# Data tabs whose columns aren't HEADER; every other styled data tab is
+# offers or a view of it.
+TAB_COLUMNS = {PRUNED_WORKSHEET_NAME: PRUNED_HEADER, VISITS_WORKSHEET_NAME: VISIT_HEADER}
+
+
+def display_label(column: str) -> str:
+    """"player_name" -> "Player Name", "tweet_url" -> "Tweet URL". Always
+    normalizes back to the column name, so the header check still passes."""
+    return " ".join(w.upper() if w in ("id", "url") else w.capitalize() for w in column.split("_"))
+
+
+def _rgb(hex_color: str, tint: float = 0.0) -> dict:
+    """Sheets color for "#RRGGBB", optionally mixed toward white by `tint`."""
+    r, g, b = (int(hex_color[i : i + 2], 16) / 255 for i in (1, 3, 5))
+    return {"red": r + (1 - r) * tint, "green": g + (1 - g) * tint, "blue": b + (1 - b) * tint}
+
+
+_WHITE = "#FFFFFF"
+
+
+def _cell_format(rng: dict, fmt: dict) -> dict:
+    """repeatCell that sets only the given userEnteredFormat fields, so
+    values and formulas in the range are left alone."""
+    return {
+        "repeatCell": {
+            "range": rng,
+            "cell": {"userEnteredFormat": fmt},
+            "fields": f"userEnteredFormat({','.join(fmt)})",
+        }
+    }
+
+
+def _size(sid: int, dimension: str, start: int, pixels: int) -> dict:
+    return {
+        "updateDimensionProperties": {
+            "range": {"sheetId": sid, "dimension": dimension, "startIndex": start, "endIndex": start + 1},
+            "properties": {"pixelSize": pixels},
+            "fields": "pixelSize",
+        }
+    }
+
+
+def _row_rule(sid: int, n: int, formula: str, fmt: dict) -> dict:
+    return {
+        "addConditionalFormatRule": {
+            "index": 0,
+            "rule": {
+                "ranges": [{"sheetId": sid, "startRowIndex": 1, "startColumnIndex": 0, "endColumnIndex": n}],
+                "booleanRule": {
+                    "condition": {"type": "CUSTOM_FORMULA", "values": [{"userEnteredValue": formula}]},
+                    "format": fmt,
+                },
+            },
+        }
+    }
+
+
+def _cell_rule(sid: int, columns: list[str], column: str, formula: str, fmt: dict) -> dict:
+    """Conditional format on one column only (rows 2+)."""
+    i = columns.index(column)
+    rule = _row_rule(sid, len(columns), formula, fmt)
+    rule["addConditionalFormatRule"]["rule"]["ranges"][0].update(startColumnIndex=i, endColumnIndex=i + 1)
+    return rule
+
+
+def _highlight_rules(sid: int, columns: list[str]) -> list[dict]:
+    """Offer tabs: commits green, decommits red, flips bold orange. The
+    visits tab: upcoming visits yellow, official visits bold."""
+    def ref(column: str) -> str:
+        return f"${_col(column, columns)}2"
+
+    def fill(color: str) -> dict:
+        return {"backgroundColorStyle": {"rgbColor": _rgb(color)}}
+
+    n = len(columns)
+    reqs = []
+    if "event_type" in columns:
+        reqs += [
+            _row_rule(sid, n, f'={ref("event_type")}="commit"', fill(COMMIT_FILL)),
+            _row_rule(sid, n, f'={ref("event_type")}="decommit"', fill(DECOMMIT_FILL)),
+            _cell_rule(sid, columns, "is_flip", f'={ref("is_flip")}="True"',
+                       {"textFormat": {"bold": True, "foregroundColorStyle": {"rgbColor": _rgb(FLIP_TEXT)}}}),
+        ]
+    if "visit_status" in columns:
+        reqs += [
+            _row_rule(sid, n, f'={ref("visit_status")}="upcoming"', fill(UPCOMING_FILL)),
+            _cell_rule(sid, columns, "visit_type", f'={ref("visit_type")}="official"', {"textFormat": {"bold": True}}),
+        ]
+    return reqs
+
+
+def _data_tab_requests(sid: int, color: str, columns: list[str]) -> list[dict]:
+    n = len(columns)
+    header = {"sheetId": sid, "startRowIndex": 0, "endRowIndex": 1, "startColumnIndex": 0, "endColumnIndex": n}
+    body = {"sheetId": sid, "startRowIndex": 1, "startColumnIndex": 0, "endColumnIndex": n}
+    reqs = [
+        _cell_format(header, {
+            "backgroundColorStyle": {"rgbColor": _rgb(color)},
+            "textFormat": {"bold": True, "foregroundColorStyle": {"rgbColor": _rgb(_WHITE)}},
+            "verticalAlignment": "MIDDLE",
+            "wrapStrategy": "WRAP",
+        }),
+        _cell_format(body, {"verticalAlignment": "MIDDLE", "wrapStrategy": "CLIP"}),
+        _size(sid, "ROWS", 0, 36),
+        {
+            "addBanding": {
+                "bandedRange": {
+                    "range": {"sheetId": sid, "startRowIndex": 0, "startColumnIndex": 0, "endColumnIndex": n},
+                    "rowProperties": {
+                        "headerColorStyle": {"rgbColor": _rgb(color)},
+                        "firstBandColorStyle": {"rgbColor": _rgb(_WHITE)},
+                        "secondBandColorStyle": {"rgbColor": _rgb(color, tint=0.9)},
+                    },
+                }
+            }
+        },
+    ]
+    reqs += _highlight_rules(sid, columns)
+    for i, column in enumerate(columns):
+        if column in COLUMN_WIDTHS:
+            reqs.append(_size(sid, "COLUMNS", i, COLUMN_WIDTHS[column]))
+        if column in HIDDEN_COLUMNS:
+            reqs.append({
+                "updateDimensionProperties": {
+                    "range": {"sheetId": sid, "dimension": "COLUMNS", "startIndex": i, "endIndex": i + 1},
+                    "properties": {"hiddenByUser": True},
+                    "fields": "hiddenByUser",
+                }
+            })
+    return reqs
+
+
+def home_rows(gids: dict[str, int]) -> tuple[list[list[str]], dict]:
+    """The Home tab's cells (USER_ENTERED) and where each part landed, for
+    styling. `gids` is {tab title: sheetId}; tabs that don't exist yet
+    (e.g. pruned, before the first prune) are left out."""
+    rows: list[list[str]] = [
+        ["CFB Offer Tracker"],
+        ["Click a tab name to jump to it. Position and region tabs update on their own "
+         "from offers, newest tweets first."],
+        [""],
+        ["Tab", "Group", "What's in it", "Rows"],
+    ]
+    marks: dict = {"table_header": 3, "tabs": {}, "sections": [], "legend": {}}
+    for title, (group, _, description) in TAB_STYLE.items():
+        if title == HOME_TAB or title not in gids:
+            continue
+        marks["tabs"][len(rows)] = title
+        rows.append([
+            f'=HYPERLINK("#gid={gids[title]}", "{title}")',
+            group,
+            description,
+            f"=COUNTIF('{title}'!A2:A, \"?*\")",
+        ])
+    rows.append([""])
+    marks["sections"].append(len(rows))
+    rows.append(["Row colors"])
+    for label, meaning in [
+        ("Commit", "The player committed to this school"),
+        ("Decommit", "The player backed out of a commitment"),
+        ("Flip", "Is Flip column: a commit that flipped from another school"),
+        ("Upcoming", "Visits tab: a visit that hasn't happened yet"),
+        ("Official", "Visits tab: an official visit (unofficial ones aren't bold)"),
+    ]:
+        marks["legend"][label] = len(rows)
+        rows.append([label, "", meaning])
+    rows.append([""])
+    marks["sections"].append(len(rows))
+    rows.append(["Tips"])
+    rows.append(["Sort offers or visits without changing them for anyone else: Data > Filter views > Newest first."])
+    rows.append(["Don't rename tabs, or insert, move or delete columns on offers or visits: the scraper relies on them. "
+                 "Colors, widths and header wording are fine to change."])
+    return rows, marks
+
+
+def _home_requests(sid: int, marks: dict) -> list[dict]:
+    def cells(row: int, col: int = 0, end_col: int | None = None) -> dict:
+        return {"sheetId": sid, "startRowIndex": row, "endRowIndex": row + 1,
+                "startColumnIndex": col, "endColumnIndex": end_col if end_col is not None else col + 1}
+
+    white_bold = {"bold": True, "foregroundColorStyle": {"rgbColor": _rgb(_WHITE)}}
+    reqs = [
+        # reset last run's formatting, then lay it out fresh
+        {"repeatCell": {"range": {"sheetId": sid}, "cell": {}, "fields": "userEnteredFormat"}},
+        {
+            "updateSheetProperties": {
+                "properties": {"sheetId": sid, "gridProperties": {"hideGridlines": True}},
+                "fields": "gridProperties.hideGridlines",
+            }
+        },
+        _size(sid, "COLUMNS", 0, 150),
+        _size(sid, "COLUMNS", 1, 130),
+        _size(sid, "COLUMNS", 2, 460),
+        _size(sid, "COLUMNS", 3, 70),
+        _cell_format(cells(0), {"textFormat": {"bold": True, "fontSize": 20}}),
+        _cell_format(cells(1), {"textFormat": {"italic": True, "foregroundColorStyle": {"rgbColor": _rgb("#666666")}}}),
+        _cell_format(cells(marks["table_header"], 0, 4), {
+            "backgroundColorStyle": {"rgbColor": _rgb(TAB_STYLE[HOME_TAB][1])},
+            "textFormat": white_bold,
+        }),
+    ]
+    for row, title in marks["tabs"].items():
+        color = TAB_STYLE[title][1]
+        reqs.append(_cell_format(cells(row), {"textFormat": {"bold": True, "fontSize": 11}}))
+        reqs.append(_cell_format(cells(row, 1), {
+            "backgroundColorStyle": {"rgbColor": _rgb(color)},
+            "textFormat": white_bold,
+            "horizontalAlignment": "CENTER",
+        }))
+    for row in marks["sections"]:
+        reqs.append(_cell_format(cells(row), {"textFormat": {"bold": True, "fontSize": 12}}))
+    legend = marks["legend"]
+    reqs.append(_cell_format(cells(legend["Commit"]), {"backgroundColorStyle": {"rgbColor": _rgb(COMMIT_FILL)}}))
+    reqs.append(_cell_format(cells(legend["Decommit"]), {"backgroundColorStyle": {"rgbColor": _rgb(DECOMMIT_FILL)}}))
+    reqs.append(_cell_format(cells(legend["Flip"]), {
+        "textFormat": {"bold": True, "foregroundColorStyle": {"rgbColor": _rgb(FLIP_TEXT)}},
+    }))
+    reqs.append(_cell_format(cells(legend["Upcoming"]), {"backgroundColorStyle": {"rgbColor": _rgb(UPCOMING_FILL)}}))
+    reqs.append(_cell_format(cells(legend["Official"]), {"textFormat": {"bold": True}}))
+    return reqs
+
+
+def style_requests(meta: dict, home_marks: dict) -> list[dict]:
+    """Every formatting request for one batch_update, given the spreadsheet
+    metadata (fetch_sheet_metadata) and home_rows' marks. Pure, so it's
+    testable without a sheet."""
+    by_title = {s["properties"]["title"]: s for s in meta.get("sheets", [])}
+    styled = [(title, by_title[title]) for title in TAB_STYLE if title in by_title]
+    reqs: list[dict] = []
+    # Drop what a previous run added, so re-running doesn't stack duplicates.
+    for _, s in styled:
+        sid = s["properties"]["sheetId"]
+        reqs += [{"deleteBanding": {"bandedRangeId": b["bandedRangeId"]}} for b in s.get("bandedRanges", [])]
+        reqs += [{"deleteConditionalFormatRule": {"sheetId": sid, "index": 0}} for _ in s.get("conditionalFormats", [])]
+        reqs += [
+            {"deleteFilterView": {"filterId": f["filterViewId"]}}
+            for f in s.get("filterViews", [])
+            if f.get("title") == NEWEST_FIRST_VIEW
+        ]
+    for index, (title, s) in enumerate(styled):
+        reqs.append({
+            "updateSheetProperties": {
+                "properties": {
+                    "sheetId": s["properties"]["sheetId"],
+                    "index": index,
+                    "tabColorStyle": {"rgbColor": _rgb(TAB_STYLE[title][1])},
+                },
+                "fields": "index,tabColorStyle",
+            }
+        })
+    for title, s in styled:
+        sid = s["properties"]["sheetId"]
+        if title == HOME_TAB:
+            reqs += _home_requests(sid, home_marks)
+            continue
+        columns = TAB_COLUMNS.get(title, HEADER)
+        reqs += _data_tab_requests(sid, TAB_STYLE[title][1], columns)
+        if title in (WORKSHEET_NAME, VISITS_WORKSHEET_NAME):
+            reqs.append({
+                "addFilterView": {
+                    "filter": {
+                        "title": NEWEST_FIRST_VIEW,
+                        "range": {"sheetId": sid, "startRowIndex": 0, "startColumnIndex": 0,
+                                  "endColumnIndex": len(columns)},
+                        "sortSpecs": [{"dimensionIndex": columns.index("tweet_date"), "sortOrder": "DESCENDING"}],
+                    }
+                }
+            })
+    return reqs
+
+
+def style_sheet(ws: gspread.Worksheet) -> None:
+    """Applies the look above to every tab and (re)builds the Home tab.
+    Safe to re-run."""
+    sh = ws.spreadsheet
+    _with_retry(ws.update, [[display_label(c) for c in HEADER]], "A1", value_input_option="RAW")
+    for title, columns in TAB_COLUMNS.items():
+        # only tabs the scraper already made; labels go on an existing header
+        try:
+            tab = _with_retry(sh.worksheet, title)
+        except WorksheetNotFound:
+            continue
+        if _with_retry(tab.row_values, 1):
+            _with_retry(tab.update, [[display_label(c) for c in columns]], "A1", value_input_option="RAW")
+    try:
+        home = _with_retry(sh.worksheet, HOME_TAB)
+    except WorksheetNotFound:
+        home = _with_retry(sh.add_worksheet, title=HOME_TAB, rows=100, cols=6)
+
+    meta = _with_retry(sh.fetch_sheet_metadata)
+    gids = {s["properties"]["title"]: s["properties"]["sheetId"] for s in meta.get("sheets", [])}
+    rows, marks = home_rows(gids)
+    _with_retry(home.batch_clear, ["A:F"])
+    _with_retry(home.update, rows, "A1", value_input_option="USER_ENTERED")
+    _with_retry(sh.batch_update, {"requests": style_requests(meta, marks)})
 
 
 def check_sheet(service_account_json: str, sheet_id: str) -> None:

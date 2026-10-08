@@ -629,6 +629,8 @@ async def run(argv: list[str] | None = None) -> list[OfferRecord]:
         )
         titles = sheets.setup_view_tabs(ws)
         print(f"setup_tabs: {len(titles)} tabs ready: {', '.join(titles)}")
+        sheets.style_sheet(ws)
+        print("setup_tabs: styled every tab and refreshed the Home tab")
         return []
     if args.check_sheet:
         sa_json = env("GOOGLE_SERVICE_ACCOUNT_JSON", required=True)
