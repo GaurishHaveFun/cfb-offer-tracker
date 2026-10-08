@@ -121,8 +121,15 @@ X blocks searches coming from cloud/CI servers (GitHub Actions gets HTTP
 
 ```
 echo "<your sheet id>" > sheet_id.txt      # gitignored, next to x_cookies.txt and sa.json
-scripts/install_mac_schedule.sh            # installs a launchd job: 00:17, 06:17, 12:17, 18:17
+scripts/install_mac_schedule.sh            # installs two launchd jobs (below)
 ```
+
+Offers run at 00:17, 06:17, 12:17 and 18:17 (`--offers-only`); visits run
+3 hours later at 03:17, 09:17, 15:17 and 21:17 (`--visits-only`), so the two
+never search X at the same time and each run stays well under the rate
+limit. Each run's lookback window starts from the newest tweet in its own
+tab. Rerun the install script after pulling this change - the old single
+job would otherwise keep running offers only.
 
 Each run appends to `logs/scrape.log`, saves its tweets to `runs/` (kept 60
 days, for `--prune-sheet`), and shows a macOS notification if it fails. Runs
@@ -146,6 +153,41 @@ over `offers`, so it updates instantly as rows are added or pruned. A player
 listing several positions (e.g. `WR/DB`) appears on each matching tab. Don't
 edit these tabs by hand; edit `offers` instead. Re-running `--setup-tabs` is
 safe.
+
+### Visits tab
+
+The visits job searches for recruit visits and writes them to a `visits`
+tab, created automatically on the first run. `visit_status` says which kind:
+
+- `completed` - the thank-you post after a visit ("thank you @Coach for
+  having me", "thanks for letting me visit", "great official visit at ...").
+- `upcoming` - a visit happening now or still to come ("I will be visiting
+  Georgia today", "on campus at Clemson", "I'll be at the Michigan game",
+  "OV set for 6/12", a game day / junior day / visit invite). Past-tense
+  wording ("had a great game day visit", "yesterday", "thanks for the
+  invite" after a visit) makes it `completed` instead.
+
+The opponent in "X vs Y", "against Y", "win over Y" or "beat Y" never gets
+a visit row.
+
+One row per player + school (a repeat visit folds its source into
+`also_reported_by`). When a thank-you post follows an upcoming row, the row
+turns `completed` and the thank-you post's URL goes in `notes`
+("completed: <url>"); the row keeps its original tweet. Rows from before
+`visit_status` existed are left blank, which means completed. `visit_type`
+is `official` for "official visit"/"#OV"/"OV" wording, else `unofficial`.
+Camp invites aren't visits, and a tweet that mentions an offer or commitment
+is never a visit (it goes to `offers` instead, if it qualifies).
+
+To backfill only visits (e.g. right after this tab was added):
+
+```
+X_COOKIES="$(cat x_cookies.txt)" GOOGLE_SERVICE_ACCOUNT_JSON="$(cat sa.json)" SHEET_ID=... \
+  python -m cfb_offers --backfill-days 5 --visits-only --dump-raw visits_backfill.jsonl
+```
+
+`--dry-run` and `--from-raw` write visits to `<out>_visits.csv` next to
+`--out`. `--prune-sheet` doesn't touch the `visits` tab.
 
 ### Cleaning up the sheet after a rule change
 
@@ -204,7 +246,12 @@ class_year, position, height, weight, high_school, state, source_type,
 source_handle, tweet_id, tweet_date, tweet_url, tweet_text,
 also_reported_by, notes, scraped_at`
 
-One row per `(player, school, event_type)`. If the same event is reported by
+The `visits` tab: `event_key, visit_type, school, player_name, player_handle,
+class_year, position, height, weight, high_school, state, source_type,
+source_handle, tweet_id, tweet_date, tweet_url, tweet_text,
+also_reported_by, notes, scraped_at, visit_status`
+
+One row per `(player, school, event_type)` (or `(player, school)` for a visit). If the same event is reported by
 multiple sources (e.g. the player and a recruiting reporter both post it),
 the earliest tweet is kept and the other sources are appended to
 `also_reported_by`.

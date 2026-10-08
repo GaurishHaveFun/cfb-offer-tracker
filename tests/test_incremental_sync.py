@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from cfb_offers import main
-from cfb_offers.models import OfferRecord
+from cfb_offers.models import OfferRecord, VisitRecord
 
 
 def _tweet(tid: str):
@@ -60,14 +60,16 @@ def harness(monkeypatch):
     monkeypatch.setenv("SHEET_ID", "sheet")
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     monkeypatch.setattr(main, "build_all_queries", lambda schools, days: ["q1", "q2", "q3"])
+    monkeypatch.setattr(main, "build_visit_queries", lambda schools, days: [])
     monkeypatch.setattr(main, "process_tweet", fake_process_tweet)
     monkeypatch.setattr(main, "jitter", noop)
     monkeypatch.setattr(main, "require_active_accounts", noop)
     monkeypatch.setattr(main.sheets, "open_sheet", lambda *a: "ws")
-    monkeypatch.setattr(main.sheets, "latest_tweet_date", lambda ws: None)
+    monkeypatch.setattr(main.sheets, "visits_worksheet", lambda ws: "visits_ws")
+    monkeypatch.setattr(main.sheets, "latest_tweet_date", lambda ws, *header: None)
     monkeypatch.setattr(
         main.sheets, "sync_records",
-        lambda ws, recs: (synced.append([r.tweet_id for r in recs]), (len(recs), 0))[1],
+        lambda ws, recs, *header: (synced.append([r.tweet_id for r in recs]), (len(recs), 0))[1],
     )
 
     def use_api(api):
@@ -97,3 +99,89 @@ def test_crash_mid_run_keeps_earlier_queries_saved(harness, tmp_path):
         asyncio.run(main.run(["--backfill", "--dump-raw", str(dump)]))
     assert synced == [["1", "2"], ["3"]]
     assert [json.loads(line)["id"] for line in dump.read_text().splitlines()] == ["1", "2", "3"]
+
+
+def test_visit_records_sync_to_the_visits_tab(harness, monkeypatch):
+    _, use_api = harness
+    calls = []
+    visit = VisitRecord(
+        event_key="fakerecruit1|oregon|visit", visit_type="official", school="Oregon",
+        player_name="Fake Recruit", player_handle="FakeRecruit1", class_year="2028",
+        position="WR", height="", weight="", high_school="", state="",
+        source_type="player", source_handle="FakeRecruit1", tweet_id="1",
+        tweet_date="2026-09-20T00:00:00+00:00", tweet_url="", tweet_text="",
+    )
+
+    async def fake_process_tweet(**kw):
+        return "ok", [visit], None
+
+    monkeypatch.setattr(main, "process_tweet", fake_process_tweet)
+    monkeypatch.setattr(main, "build_all_queries", lambda schools, days: ["q3"])
+    monkeypatch.setattr(
+        main.sheets, "sync_records",
+        lambda ws, recs, header=main.sheets.HEADER: (calls.append((ws, header)), (len(recs), 0))[1],
+    )
+    use_api(FakeAPI(PAGES))
+    asyncio.run(main.run(["--backfill"]))
+    assert calls == [("visits_ws", main.sheets.VISIT_HEADER)]
+
+
+def _window_harness(harness, monkeypatch):
+    """Records which tab the lookback window was read from and which query
+    sets were searched."""
+    _, use_api = harness
+    seen = {"latest_from": [], "queries": []}
+
+    def latest(ws, *header):
+        seen["latest_from"].append(ws)
+        return None
+
+    class RecordingAPI(FakeAPI):
+        async def search(self, query, limit):
+            seen["queries"].append(query)
+            for t in []:
+                yield t
+
+    monkeypatch.setattr(main.sheets, "latest_tweet_date", latest)
+    monkeypatch.setattr(main, "build_visit_queries", lambda schools, days: ["v1"])
+    use_api(RecordingAPI({}))
+    return seen
+
+
+def test_visits_only_window_comes_from_visits_tab(harness, monkeypatch):
+    seen = _window_harness(harness, monkeypatch)
+    asyncio.run(main.run(["--visits-only"]))
+    assert seen == {"latest_from": ["visits_ws"], "queries": ["v1"]}
+
+
+def test_offers_only_window_comes_from_offers_tab(harness, monkeypatch):
+    seen = _window_harness(harness, monkeypatch)
+    asyncio.run(main.run(["--offers-only"]))
+    assert seen == {"latest_from": ["ws"], "queries": ["q1", "q2", "q3"]}
+
+
+def test_offers_only_never_writes_visits(harness, monkeypatch):
+    _, use_api = harness
+    calls = []
+    visit = VisitRecord(
+        event_key="fakerecruit1|oregon|visit", visit_type="official", school="Oregon",
+        player_name="", player_handle="", class_year="", position="", height="", weight="",
+        high_school="", state="", source_type="player", source_handle="", tweet_id="1",
+        tweet_date="", tweet_url="", tweet_text="",
+    )
+
+    async def fake_process_tweet(**kw):
+        return "ok", [visit], None
+
+    monkeypatch.setattr(main, "process_tweet", fake_process_tweet)
+    monkeypatch.setattr(
+        main.sheets, "sync_records", lambda ws, recs, *h: (calls.append(ws), (len(recs), 0))[1]
+    )
+    use_api(FakeAPI(PAGES))
+    asyncio.run(main.run(["--offers-only"]))
+    assert calls == []
+
+
+def test_offers_only_and_visits_only_are_exclusive():
+    with pytest.raises(SystemExit):
+        main.parse_args(["--offers-only", "--visits-only"])

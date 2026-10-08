@@ -30,9 +30,11 @@ STRONG_OUTLET_BIO_RE = re.compile(
 # First-person offer wording ("I am blessed", "blessed to receive", "my
 # offer") means the tweet's author is the player announcing their own offer,
 # whatever a stray outlet-name word in their bio might suggest - unless the
-# bio is unambiguously an outlet's (see STRONG_OUTLET_BIO_RE).
+# bio is unambiguously an outlet's (see STRONG_OUTLET_BIO_RE). A visit
+# thank-you ("thanks for having me", "letting me visit") is the same.
 FIRST_PERSON_OFFER_RE = re.compile(
-    r"\bi\s*(?:'m|\s+am)\b(?:[^.!\n]{0,25})\bblessed\b|\bblessed\s+to\s+receive\b|\bmy\s+offer\b",
+    r"\bi\s*(?:'m|\s+am)\b(?:[^.!\n]{0,25})\bblessed\b|\bblessed\s+to\s+receive\b|\bmy\s+offer\b"
+    r"|\bfor\s+having\s+me\b|\bletting\s+me\s+visit\b",
     re.IGNORECASE,
 )
 

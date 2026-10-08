@@ -1,29 +1,35 @@
 #!/bin/zsh
-# Installs (or reinstalls) the launchd job that runs scripts/run_scheduled.sh
-# at 00:17, 06:17, 12:17 and 18:17. Runs missed while the Mac was asleep run
-# once when it wakes. Uninstall:
+# Installs (or reinstalls) the two launchd jobs that run
+# scripts/run_scheduled.sh: offers at 00:17, 06:17, 12:17 and 18:17, and
+# visits 3 hours later (03:17, 09:17, 15:17, 21:17), so the two never search
+# X at the same time. Runs missed while the Mac was asleep run once when it
+# wakes. Uninstall:
 #   launchctl bootout gui/$(id -u)/com.cfboffers.scrape
-#   rm ~/Library/LaunchAgents/com.cfboffers.scrape.plist
+#   launchctl bootout gui/$(id -u)/com.cfboffers.visits
+#   rm ~/Library/LaunchAgents/com.cfboffers.{scrape,visits}.plist
 set -euo pipefail
 repo="${0:A:h:h}"
-label="com.cfboffers.scrape"
-plist="$HOME/Library/LaunchAgents/$label.plist"
 mkdir -p "$HOME/Library/LaunchAgents" "$repo/logs"
 chmod +x "$repo/scripts/run_scheduled.sh"
 
-intervals=""
-for h in 0 6 12 18; do
-  intervals+="<dict><key>Hour</key><integer>$h</integer><key>Minute</key><integer>17</integer></dict>"
-done
+# install_job <label> <mode> <hours...>
+install_job() {
+  local label=$1 mode=$2
+  shift 2
+  local plist="$HOME/Library/LaunchAgents/$label.plist"
+  local intervals=""
+  for h in "$@"; do
+    intervals+="<dict><key>Hour</key><integer>$h</integer><key>Minute</key><integer>17</integer></dict>"
+  done
 
-cat > "$plist" <<PLIST
+  cat > "$plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key><string>$label</string>
   <key>ProgramArguments</key>
-  <array><string>/bin/zsh</string><string>$repo/scripts/run_scheduled.sh</string></array>
+  <array><string>/bin/zsh</string><string>$repo/scripts/run_scheduled.sh</string><string>$mode</string></array>
   <key>StartCalendarInterval</key><array>$intervals</array>
   <key>StandardOutPath</key><string>$repo/logs/launchd.log</string>
   <key>StandardErrorPath</key><string>$repo/logs/launchd.log</string>
@@ -31,8 +37,12 @@ cat > "$plist" <<PLIST
 </plist>
 PLIST
 
-launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
-launchctl bootstrap "gui/$(id -u)" "$plist"
-echo "installed $label -> $plist"
-echo "run once now:   launchctl kickstart gui/\$(id -u)/$label"
+  launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+  launchctl bootstrap "gui/$(id -u)" "$plist"
+  echo "installed $label ($mode) -> $plist"
+}
+
+install_job com.cfboffers.scrape offers 0 6 12 18
+install_job com.cfboffers.visits visits 3 9 15 21
+echo "run once now:   launchctl kickstart gui/\$(id -u)/com.cfboffers.scrape   (or .visits)"
 echo "watch the log:  tail -f \"$repo/logs/scrape.log\""

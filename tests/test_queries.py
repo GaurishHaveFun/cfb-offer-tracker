@@ -78,12 +78,12 @@ def test_offer_commit_decommit_phrases_combined_into_one_clause():
 
 
 def test_query_count_stays_modest_for_default_config(schools):
-    # Schools packed several-per-query instead of one per school per event
-    # type - the longer phrase clause ("offered", "new offer") fits fewer
-    # aliases per query, but it should still be well under one per school.
+    # One shared phrase clause instead of one query per school per event
+    # type. The longer phrase clause ("offered", "new offer") and the
+    # university-handle aliases leave room for about one school per query,
+    # but never more queries than schools.
     queries = build_all_queries(schools, since_days=7)
-    assert 1 <= len(queries) <= 30
-    assert len(queries) < len(schools)
+    assert 1 <= len(queries) <= len(schools)
 
 
 def test_group_schools_never_exceeds_max_len(schools):

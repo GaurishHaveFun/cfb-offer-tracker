@@ -13,7 +13,7 @@ import pytest
 from gspread.exceptions import APIError, WorksheetNotFound
 
 from cfb_offers import sheets
-from cfb_offers.models import OfferRecord
+from cfb_offers.models import OfferRecord, VisitRecord
 
 SA_JSON = json.dumps({"client_email": "bot@my-project.iam.gserviceaccount.com"})
 
@@ -432,3 +432,58 @@ def test_shifted_rows_are_moved_back():
 
 def test_header_with_trailing_blank_column_still_matches():
     sheets._ensure_header(FakeWorksheet(rows=[sheets.HEADER + [""]]))
+
+
+# --- visits tab: visit_status column -------------------------------------
+
+
+def make_visit(status="completed", tweet_id="1") -> VisitRecord:
+    return VisitRecord(
+        event_key="qb1|alabama|visit",
+        visit_type="unofficial",
+        school="Alabama",
+        player_name="Some Player",
+        player_handle="qb1",
+        class_year="2027",
+        position="QB",
+        height="",
+        weight="",
+        high_school="",
+        state="",
+        source_type="player",
+        source_handle="qb1",
+        tweet_id=tweet_id,
+        tweet_date="2026-09-01T00:00:00Z",
+        tweet_url=f"https://x.com/qb1/status/{tweet_id}",
+        tweet_text="",
+        visit_status=status,
+    )
+
+
+def test_visits_tab_from_before_visit_status_gains_the_column():
+    old_header = sheets.VISIT_HEADER[:-1]
+    ws = FakeWorksheet(rows=[old_header, ["k1"] + [""] * (len(old_header) - 1)], title="visits")
+    ws.col_count = len(old_header)
+    added = []
+    ws.add_cols = lambda n: added.append(n)
+    sheets._ensure_header(ws, sheets.VISIT_HEADER)
+    assert ws.rows[0] == sheets.VISIT_HEADER
+    assert added == [1]
+    assert ws.rows[1][0] == "k1"  # data untouched
+
+
+def test_completed_visit_upgrades_an_upcoming_row():
+    upcoming = make_visit("upcoming", tweet_id="1")
+    ws = FakeWorksheet(rows=[sheets.VISIT_HEADER, upcoming.as_row()], title="visits")
+    appended, updated = sheets.sync_records(ws, [make_visit("completed", tweet_id="2")], sheets.VISIT_HEADER)
+    assert (appended, updated) == (0, 1)
+    row = dict(zip(sheets.VISIT_HEADER, ws.rows[1]))
+    assert row["visit_status"] == "completed" and row["tweet_id"] == "1"
+    assert row["notes"] == "completed: https://x.com/qb1/status/2"
+
+
+def test_completed_visit_leaves_older_blank_status_rows_alone():
+    old_row = make_visit(tweet_id="1").as_row()[:-1]  # no visit_status cell
+    ws = FakeWorksheet(rows=[sheets.VISIT_HEADER, old_row], title="visits")
+    assert sheets.sync_records(ws, [make_visit(tweet_id="2")], sheets.VISIT_HEADER) == (0, 0)
+    assert ws.batch_update_calls == []

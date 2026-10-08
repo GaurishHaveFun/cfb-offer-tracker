@@ -48,6 +48,17 @@ DECOMMIT_PHRASES = [
 ]
 ALL_PHRASES = OFFER_PHRASES + COMMIT_PHRASES + DECOMMIT_PHRASES
 
+# Completed-visit posts for the 'visits' tab, searched as their own query set
+# (build_visit_queries) so the offer queries above keep their packing. These
+# match classify.py's VISIT_PATTERNS.
+VISIT_PHRASES = [
+    '"for having me"', '"for having us"', '"letting me visit"', '"official visit"',
+    "#OV", '"great visit"', '"amazing visit"', '"great time at"',
+    # upcoming visits (see classify.UPCOMING_VISIT_PATTERNS)
+    '"will be visiting"', '"visiting today"', '"on campus"', '"game day visit"',
+    '"visit invite"', '"OV set"',
+]
+
 # Sports that share recruiting-post wording ("committed to", "offer from")
 # with football but that we never want - added to every query's shared
 # clause so X filters them out before they even reach classify.py.
@@ -66,6 +77,7 @@ def _phrase_clause(phrases: list[str]) -> str:
 
 
 PHRASE_CLAUSE = _phrase_clause(ALL_PHRASES)
+VISIT_PHRASE_CLAUSE = _phrase_clause(VISIT_PHRASES)
 
 
 def _quote(term: str) -> str:
@@ -82,22 +94,27 @@ def _min_suffix(since_days: int) -> str:
     return f"-filter:retweets since:{_since_date(since_days)}"
 
 
-def _base_query_for_group(schools: list[School], since_days: int) -> str:
+def _base_query_for_group(
+    schools: list[School], since_days: int, phrase_clause: str = PHRASE_CLAUSE
+) -> str:
     """Phrase clause + aliases + the minimal suffix (no negative-sport
     terms). Used to decide packing/grouping, and as the floor every query
     must fit under - negative terms are added on top of this only if they
     still fit (see _query_for_group)."""
-    return f"{PHRASE_CLAUSE} {_alias_clause(schools)} {_min_suffix(since_days)}"
+    return f"{phrase_clause} {_alias_clause(schools)} {_min_suffix(since_days)}"
 
 
 def _query_for_group(
-    schools: list[School], since_days: int, max_len: int = MAX_QUERY_LEN
+    schools: list[School],
+    since_days: int,
+    max_len: int = MAX_QUERY_LEN,
+    phrase_clause: str = PHRASE_CLAUSE,
 ) -> str:
     """The base query, with as many NEGATIVE_SPORT_TERMS appended as still
     fit within max_len (there isn't always room for all of them once a
     group's aliases eat into the budget - see module docstring)."""
     return _with_negatives(
-        f"{PHRASE_CLAUSE} {_alias_clause(schools)}", _min_suffix(since_days), max_len
+        f"{phrase_clause} {_alias_clause(schools)}", _min_suffix(since_days), max_len
     )
 
 
@@ -121,7 +138,10 @@ _FIRST_NEGATIVE_ROOM = len(" " + NEGATIVE_SPORT_TERMS[0])
 
 
 def group_schools(
-    schools: list[School], since_days: int, max_len: int = MAX_QUERY_LEN
+    schools: list[School],
+    since_days: int,
+    max_len: int = MAX_QUERY_LEN,
+    phrase_clause: str = PHRASE_CLAUSE,
 ) -> list[list[School]]:
     """Greedily packs schools into groups so each group's base query string
     (phrases + aliases + minimal suffix, before any negative-sport terms)
@@ -132,7 +152,8 @@ def group_schools(
     current: list[School] = []
     for school in schools:
         candidate = current + [school]
-        if current and len(_base_query_for_group(candidate, since_days)) + _FIRST_NEGATIVE_ROOM > max_len:
+        base = _base_query_for_group(candidate, since_days, phrase_clause)
+        if current and len(base) + _FIRST_NEGATIVE_ROOM > max_len:
             groups.append(current)
             current = [school]
         else:
@@ -154,6 +175,15 @@ def build_all_queries(schools: list[School], since_days: int) -> list[str]:
     return [_query_for_group(group, since_days) for group in group_schools(schools, since_days)]
 
 
+def build_visit_queries(schools: list[School], since_days: int) -> list[str]:
+    """build_all_queries with the visit phrases instead of the offer/commit/
+    decommit ones."""
+    groups = group_schools(schools, since_days, phrase_clause=VISIT_PHRASE_CLAUSE)
+    return [
+        _query_for_group(g, since_days, phrase_clause=VISIT_PHRASE_CLAUSE) for g in groups
+    ]
+
+
 # " until:YYYY-MM-DD" - the extra room a date-sliced query needs.
 _UNTIL_LEN = len(" until:2026-01-01")
 
@@ -172,10 +202,14 @@ def backfill_slices(days: int, slice_days: int = 7, today: date | None = None) -
     return slices
 
 
-def build_slice_queries(schools: list[School], since: date, until: date) -> list[str]:
+def build_slice_queries(
+    schools: list[School], since: date, until: date, phrase_clause: str = PHRASE_CLAUSE
+) -> list[str]:
     """The same school groups as build_all_queries, bounded to one date
     window with since:/until:, so a busy recent week can't crowd older weeks
     out of a long backfill."""
     suffix = f"-filter:retweets since:{since.isoformat()} until:{until.isoformat()}"
-    groups = group_schools(schools, 0, max_len=MAX_QUERY_LEN - _UNTIL_LEN)
-    return [_with_negatives(f"{PHRASE_CLAUSE} {_alias_clause(g)}", suffix) for g in groups]
+    groups = group_schools(
+        schools, 0, max_len=MAX_QUERY_LEN - _UNTIL_LEN, phrase_clause=phrase_clause
+    )
+    return [_with_negatives(f"{phrase_clause} {_alias_clause(g)}", suffix) for g in groups]

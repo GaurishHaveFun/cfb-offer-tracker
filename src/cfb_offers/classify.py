@@ -139,7 +139,8 @@ SCHOOL_REJECT_SUFFIXES = [
     # Other colleges that start with a tracked state name: "Texas College",
     # "Indiana Wesleyan", "Texas Lutheran", "Michigan Technological",
     # "Georgia Knights" (7v7), "Georgia Institute of Technology" (that's
-    # Georgia Tech - matched by its own alias), "Miami Ohio",
+    # Georgia Tech - not an alias, to keep its query under MAX_QUERY_LEN, so
+    # it only matches via a tagged handle), "Miami Ohio",
     # "Oklahoma Panhandle State".
     "College", "Wesleyan", "Lutheran", "Technological", "Knights", "Institute",
     "Ohio", "Panhandle", "Gulf Coast", "Mountain",
@@ -620,3 +621,148 @@ def classify_tweet(text: str, schools: list[School], bio: str = "") -> list[Clas
         return [ClassifiedEvent("decommit", False, matched[0])]
 
     return []
+
+
+# --- visits -------------------------------------------------------------------
+# A completed visit usually ends with the recruit thanking the staff: "Thank
+# you @CoachX for having me", "thanks coach for letting me visit", "Had a
+# great official visit at Georgia". Matches queries.py's VISIT_PHRASES.
+VISIT_PATTERNS = [
+    r"for\s+having\s+(?:me|us)\b",
+    r"letting\s+(?:me|us)\s+(?:come\s+)?visit",
+    r"\bthank(?:s|\s+you)\b.{0,80}?\bvisit",
+    r"(?<!un)official\s+visit",
+    r"#OV\b",
+    r"\b(?:great|amazing|awesome|incredible)\s+(?:official\s+|unofficial\s+|game\s*-?\s*day\s+)?visit",
+    r"\b(?:great|amazing|awesome|incredible)\s+time\s+(?:at|in)\b",
+    # No tense of its own: "Had a great game day visit" (completed),
+    # "Looking forward to a game day visit" (upcoming, by its other wording).
+    r"\bgame\s*-?\s*day\s+visit\b",
+]
+# Thank-you wording that only follows a visit - unlike "thanks for the
+# visit invite", it can't be about one still coming up.
+AFTER_VISIT_PATTERNS = [
+    r"for\s+having\s+(?:me|us)\b",
+    r"letting\s+(?:me|us)\s+(?:come\s+)?visit",
+    r"\b(?:great|amazing|awesome|incredible)\s+(?:official\s+|unofficial\s+|game\s*-?\s*day\s+)?visit",
+    r"\b(?:great|amazing|awesome|incredible)\s+time\s+(?:at|in)\b",
+]
+# "Had a great game day visit ... thanks for the invite", "yesterday",
+# "this past weekend": the visit already happened.
+PAST_VISIT_RE = re.compile(
+    r"\b(?:had|enjoyed)\b|\byesterday\b|\blast\s+night\b|\bpast\s+weekend\b|\blate\s+post\b"
+    r"|\bhospitality\b",
+    re.IGNORECASE,
+)
+# Bare "OV" only in capitals - lowercase "ov" is too often something else.
+OFFICIAL_VISIT_RE = re.compile(r"(?<!un)official\s+visit|#OV\b|(?-i:\bOV\b)", re.IGNORECASE)
+# A visit that's happening now or still coming up: "I will be visiting
+# Georgia today", "on campus at Clemson", "I'll be at the Clemson vs Georgia
+# Southern game", "OV set for 6/12", a game day / junior day / visit invite.
+# These rows get visit_status "upcoming".
+UPCOMING_VISIT_PATTERNS = [
+    r"\b(?:will\s+be|i'?ll\s+be|i'?m|i\s+am|be)\s+(?:visiting|taking|on\s+campus)\b",
+    r"\b(?:visiting|on\s+campus)\b.{0,60}?\b(?:today|tonight|tomorrow|this\s+week(?:end)?)\b",
+    r"\b(?:will\s+be|i'?ll\s+be|i'?m|i\s+am)\s+(?:at|attending)\b.{0,60}?\bgame\b",
+    r"\b(?:i'?m|i\s+am)\s+at\b.{0,40}?\b(?:today|tonight)\b",
+    r"\bheading\s+to\b",
+    r"\bwill\s+(?:visit|take|attend)\b",
+    r"\b(?:excited|pumped|can'?t\s+wait)\s+to\s+be\b",
+    # Not "looking forward to coming back / continuing to build ..." - that
+    # closes a thank-you post for a visit that already happened.
+    r"\blooking\s+forward\s+to\s+(?!coming\s+back|getting\s+back|continuing|building)",
+    r"\bon\s+(?:his|her|my)\s+way\s+to\b",
+    r"game\s*-?\s*day\s+(?:visit\s+)?invite",
+    r"junior\s+day\s+invite",
+    r"visit\s+invite",
+    r"\bupcoming\b",
+    r"\bscheduled\b",
+    r"\b(?:OV|visit)\s+(?:is\s+)?(?:set|locked\s+in)\b",
+    r"\b(?:blessed|excited|honored)\s+to\s+announce\b",
+]
+# A visit someone has on the calendar - upcoming even next to thank-you or
+# past-tense wording ("Had a great time at X, OV set for June").
+SCHEDULED_VISIT_PATTERNS = [
+    r"\bupcoming\b",
+    r"\bscheduled\b",
+    r"\b(?:OV|visit)\s+(?:is\s+)?(?:set|locked\s+in)\b",
+    r"\b(?:blessed|excited|honored)\s+to\s+announce\b",
+]
+# "Blessed to receive" precedes awards and offers too - with no invite
+# alongside it, it isn't a visit.
+RECEIVE_RE = re.compile(r"\b(?:blessed|excited|honored)\s+to\s+receive\b", re.IGNORECASE)
+# "Clemson vs Georgia Southern game", "their win over Florida", "Big win
+# against Cincinnati": the school right after is the opponent, not the
+# school visited.
+OPPONENT_RE = re.compile(
+    r"\s(?:vs\.?|v\.|versus|against|beat|beats|defeated|(?:win|victory)\s+over)\s", re.IGNORECASE
+)
+# How far past "vs" the opponent's name can run: up to the next
+# punctuation ("vs Auburn! i appreciate @Vol_Football" names only Auburn).
+OPPONENT_WINDOW_RE = re.compile(r"[^!.,?;:\n]{0,30}")
+VISIT_WINDOW_BEFORE = 60
+VISIT_WINDOW_AFTER = 120
+
+
+@dataclass(frozen=True)
+class ClassifiedVisit:
+    school: str
+    visit_type: str  # official | unofficial
+    status: str = "completed"  # upcoming | completed
+
+
+def visit_windows(text: str) -> str:
+    """The text surrounding every visit-phrase match, joined."""
+    spans = []
+    for p in VISIT_PATTERNS + UPCOMING_VISIT_PATTERNS:
+        for m in re.finditer(p, text, re.IGNORECASE | re.DOTALL):
+            spans.append(text[max(0, m.start() - VISIT_WINDOW_BEFORE): m.end() + VISIT_WINDOW_AFTER])
+    return "\n".join(spans)
+
+
+def visit_status(text: str) -> str | None:
+    """"upcoming", "completed", or None when there's no visit wording.
+    Upcoming wording wins unless the post also says the visit already
+    happened ("for having me", "had", "yesterday") - and a scheduled visit
+    ("OV set for 6/12") is upcoming either way."""
+    upcoming = _search_any(UPCOMING_VISIT_PATTERNS, text)
+    if upcoming and _search_any(SCHEDULED_VISIT_PATTERNS, text):
+        return "upcoming"
+    happened = _search_any(AFTER_VISIT_PATTERNS, text) or PAST_VISIT_RE.search(text)
+    if upcoming and not happened:
+        return "upcoming"
+    if upcoming or _search_any(VISIT_PATTERNS, text):
+        return "completed"
+    return None
+
+
+def _opponents(names: list[str], text: str, schools: list[School]) -> set[str]:
+    """Schools named right after "vs"/"against"/"win over"."""
+    windows = [OPPONENT_WINDOW_RE.match(text, m.end()).group() for m in OPPONENT_RE.finditer(text)]
+    return {n for n in names if any(_school_named_in(n, w, schools) for w in windows)}
+
+
+def classify_visit(text: str, schools: list[School], bio: str = "") -> list[ClassifiedVisit]:
+    """Upcoming or completed visits named in one tweet: noise -> sport ->
+    visit wording -> school(s) named near it. A tweet that talks about an
+    offer or a commit/decommit is never a visit - even one classify_tweet
+    didn't turn into a row ("for having me and giving me an official
+    offer", an offer from an untracked school)."""
+    # "can’t", "I’ll": phones curl the apostrophe.
+    text = html.unescape(text or "").replace("\u2019", "'").replace("\u2018", "'")
+
+    if _search_any(NOISE_PATTERNS, text):
+        return []
+    if should_drop_for_sport(text, bio, schools):
+        return []
+    status = visit_status(text)
+    if status is None or (status == "completed" and RECEIVE_RE.search(text)):
+        return []
+    if OFFER_WORD_RE.search(text) or detect_event_type(text)[0] is not None:
+        return []
+
+    near = visit_windows(text)
+    visit_type = "official" if OFFICIAL_VISIT_RE.search(text) else "unofficial"
+    named = [s for s in match_schools(text, schools) if _school_named_in(s, near, schools)]
+    opponents = _opponents(named, text, schools)
+    return [ClassifiedVisit(school, visit_type, status) for school in named if school not in opponents]

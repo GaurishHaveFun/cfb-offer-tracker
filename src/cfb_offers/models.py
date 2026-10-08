@@ -36,3 +36,41 @@ class OfferRecord:
 
     def as_row(self) -> list[str]:
         return [str(getattr(self, name)) for name in self.columns()]
+
+
+@dataclass
+class VisitRecord:
+    """One row of the 'visits' tab = one player's visit to a school, upcoming
+    or completed (repeat visits to the same school fold into the first row;
+    an upcoming row turns completed when the thank-you post shows up)."""
+
+    event_key: str
+    visit_type: str  # "official" | "unofficial"
+    school: str
+    player_name: str
+    player_handle: str
+    class_year: str
+    position: str
+    height: str
+    weight: str
+    high_school: str
+    state: str
+    source_type: str  # "player" | "reporter" | "coach"
+    source_handle: str
+    tweet_id: str
+    tweet_date: str
+    tweet_url: str
+    tweet_text: str
+    also_reported_by: str = ""
+    notes: str = ""
+    scraped_at: str = ""
+    # Last so sheets made before it existed only gain a column; blank (an
+    # older row) means completed.
+    visit_status: str = "completed"  # "upcoming" | "completed"
+
+    @staticmethod
+    def columns() -> list[str]:
+        return [f.name for f in fields(VisitRecord)]
+
+    def as_row(self) -> list[str]:
+        return [str(getattr(self, name)) for name in self.columns()]
