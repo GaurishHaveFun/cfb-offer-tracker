@@ -5,6 +5,21 @@ def test_player_bio_classified_as_player(tweets, schools):
     assert classify_author(tweets["player_offer"]["author"]["description"], schools) == "player"
 
 
+
+def test_star_rating_and_combine_numbers_count_as_recruit_context(schools):
+    # No class year and no "HS"/"offer" word - the position plus a star
+    # rating or combine numbers is what marks these as recruits.
+    for bio in [
+        "4 ⭐️ | 6’3” ATH 40: 4.5| Vert: 34”| @Bollesfootball | All American",
+        "4⭐️ DB @WakeFb",
+        "ATH/NICKEL/SAFETY/6’1/193/40yds:4.42/vert:39.7",
+    ]:
+        assert classify_author(bio, schools) == "player", bio
+
+
+def test_star_rating_without_a_position_is_not_a_player(schools):
+    assert classify_author("5 star dad | Dawgs fan", schools) is None
+
 def test_reporter_bio_classified_as_reporter(tweets, schools):
     assert classify_author(tweets["reporter_commit"]["author"]["description"], schools) == "reporter"
 

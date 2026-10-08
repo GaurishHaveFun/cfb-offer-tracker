@@ -77,13 +77,12 @@ def test_offer_commit_decommit_phrases_combined_into_one_clause():
         assert phrase in ALL_PHRASES
 
 
-def test_query_count_is_about_thirteen_for_default_config(schools):
-    # 26 schools packed several-per-query instead of 78 (26 x 3 event
-    # types) - length constraints keep it from hitting exactly 5 like the
-    # original 15-school config did, but it should still be a modest
-    # handful, not one-per-school-per-event-type.
+def test_query_count_stays_modest_for_default_config(schools):
+    # Schools packed several-per-query instead of one per school per event
+    # type - the longer phrase clause ("offered", "new offer") fits fewer
+    # aliases per query, but it should still be well under one per school.
     queries = build_all_queries(schools, since_days=7)
-    assert 1 <= len(queries) <= 20
+    assert 1 <= len(queries) <= 30
     assert len(queries) < len(schools)
 
 

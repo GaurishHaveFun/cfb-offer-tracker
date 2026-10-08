@@ -36,7 +36,7 @@ schools:
     handles: ["TexasFootball"]
     coach_handles: []
   - name: Michigan
-    aliases: ["Michigan", "Wolverines", "@UMichFootball", "#GoBlue"]
+    aliases: ["Michigan", "Wolverines", "@UMichFootball", "#GoBlue", "@UMich"]
     handles: ["UMichFootball"]
     coach_handles: []
   - name: USC

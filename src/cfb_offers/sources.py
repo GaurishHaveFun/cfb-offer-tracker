@@ -63,10 +63,13 @@ ORG_BIO_RE = re.compile(
 
 # A class year alone ("c/o 2027", "Class of '27", "2027") or a football
 # position plus some recruit context ("DL | Norcross HS") - a bare state
-# code, "HS" alone, or a location alone is not enough.
+# code, "HS" alone, or a location alone is not enough. A star rating ("4 ⭐️",
+# "3-star") or combine numbers ("40: 4.5", "Vert: 34") also count - only
+# recruits put those next to a position.
 RECRUIT_CONTEXT_RE = re.compile(
     r"high\s+school|\bHS\b|\bprep\b|academy|class\s+of|c/?o\s*['‘’]?\d{2}|"
-    r"committed|recruit|offer",
+    r"committed|recruit|offer|"
+    r"\d\s*(?:⭐|★|-?\s*star\b)|\b40\s*(?:yds?|yards?)?\s*[:\-]?\s*4\.\d|\bvert(?:ical)?\b",
     re.IGNORECASE,
 )
 
