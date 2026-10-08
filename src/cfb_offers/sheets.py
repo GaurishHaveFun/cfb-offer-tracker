@@ -17,8 +17,8 @@ from gspread.exceptions import APIError, WorksheetNotFound
 
 from dataclasses import replace
 
-from cfb_offers.dedupe import add_source, canonical_key
-from cfb_offers.models import OfferRecord
+from cfb_offers.dedupe import add_completed_note, add_source, canonical_key
+from cfb_offers.models import OfferRecord, VisitRecord
 
 HEADER = OfferRecord.columns()
 WORKSHEET_NAME = "offers"
@@ -26,6 +26,9 @@ WORKSHEET_NAME = "offers"
 # when and why, so any prune can be reviewed and undone by hand.
 PRUNED_WORKSHEET_NAME = "pruned"
 PRUNED_HEADER = HEADER + ["pruned_at", "prune_reason"]
+# Completed recruit visits get their own tab with their own (trimmed) schema.
+VISITS_WORKSHEET_NAME = "visits"
+VISIT_HEADER = VisitRecord.columns()
 
 # Retry gspread calls that fail with a rate-limit (429) or server error
 # (5xx) response - both are transient and worth a backoff-and-retry instead
@@ -119,14 +122,14 @@ def _header_cell_ok(found: str, expected: str) -> bool:
     )
 
 
-def _header_matches(found: list[str]) -> bool:
+def _header_matches(found: list[str], header: list[str] = HEADER) -> bool:
     """The header is fine if every column is where the code expects it,
     whatever its display label ("Player Name" for player_name, "HS" for
     high_school). Columns are read by position, so a moved, inserted or
     deleted column is the thing this must catch."""
     found = _trim(found)
-    found = found + [""] * (len(HEADER) - len(found))
-    return len(found) == len(HEADER) and all(_header_cell_ok(f, h) for f, h in zip(found, HEADER))
+    found = found + [""] * (len(header) - len(found))
+    return len(found) == len(header) and all(_header_cell_ok(f, h) for f, h in zip(found, header))
 
 
 def _trim(cells: list[str]) -> list[str]:
@@ -138,39 +141,50 @@ def _trim(cells: list[str]) -> list[str]:
     return cells
 
 
-def _only_blanked(found: list[str]) -> bool:
+def _only_blanked(found: list[str], header: list[str] = HEADER) -> bool:
     """True if `found` is the expected header with some cells emptied."""
     found = _trim(found)
-    found = found + [""] * (len(HEADER) - len(found))
-    return len(found) == len(HEADER) and all(f == "" or _header_cell_ok(f, h) for f, h in zip(found, HEADER))
+    found = found + [""] * (len(header) - len(found))
+    return len(found) == len(header) and all(
+        f == "" or _header_cell_ok(f, h) for f, h in zip(found, header)
+    )
 
 
-def _ensure_header(ws: gspread.Worksheet) -> None:
+def _ensure_header(ws: gspread.Worksheet, header: list[str] = HEADER) -> None:
     """Creates the header row if the worksheet is empty; otherwise verifies
-    the existing header row matches OfferRecord's schema exactly, raising
-    SheetSchemaError if it doesn't.
+    the existing header row matches `header` (OfferRecord's schema by
+    default) exactly, raising SheetSchemaError if it doesn't.
     """
     values = _with_retry(ws.get_all_values)
     if not values or not values[0]:
-        _with_retry(ws.append_rows, [HEADER], value_input_option="RAW")
+        _with_retry(ws.append_rows, [header], value_input_option="RAW")
         _with_retry(ws.freeze, rows=1)
         return
 
     existing_header = values[0]
-    if not _header_matches(existing_header) and _only_blanked(existing_header):
-        # Someone cleared a header cell (e.g. A1) by hand; every other cell
-        # still matches, so fill in just the blank ones (keeping any
-        # renamed labels as they are).
-        print("warning: restored blank header cell(s) in the offers tab", file=sys.stderr)
+    if not _header_matches(existing_header, header) and _only_blanked(existing_header, header):
+        # Someone cleared a header cell (e.g. A1) by hand, or the schema
+        # gained a column at the end (visit_status); every other cell still
+        # matches, so fill in just the blank ones (keeping any renamed
+        # labels as they are).
         trimmed = _trim(existing_header)
-        padded = trimmed + [""] * (len(HEADER) - len(trimmed))
-        healed = [f or h for f, h in zip(padded, HEADER)]
+        if len(trimmed) < len(header) and all(trimmed):
+            added = ", ".join(header[len(trimmed):])
+            print(f"note: added column(s) {added} to the {ws.title} tab", file=sys.stderr)
+        else:
+            print(f"warning: restored blank header cell(s) in the {ws.title} tab", file=sys.stderr)
+        col_count = getattr(ws, "col_count", len(header))
+        if col_count < len(header):
+            _with_retry(ws.add_cols, len(header) - col_count)
+        padded = trimmed + [""] * (len(header) - len(trimmed))
+        healed = [f or h for f, h in zip(padded, header)]
         _with_retry(ws.update, [healed], "A1", value_input_option="RAW")
         existing_header = healed
-    if not _header_matches(existing_header):
+    if not _header_matches(existing_header, header):
+        schema = "VisitRecord" if header == VISIT_HEADER else "OfferRecord"
         raise SheetSchemaError(
-            "sheet header does not match the OfferRecord schema.\n"
-            f"  expected: {HEADER}\n"
+            f"{ws.title} tab header does not match the {schema} schema.\n"
+            f"  expected: {header}\n"
             f"  found:    {existing_header}\n"
             "Header labels can be renamed, but columns must stay in this order "
             "(no moved, inserted or deleted columns). Fix the header row and run again."
@@ -189,14 +203,28 @@ def open_sheet(service_account_json: str, sheet_id: str) -> gspread.Worksheet:
     return ws
 
 
-def load_existing_event_keys(ws: gspread.Worksheet) -> dict[str, int]:
+def visits_worksheet(ws: gspread.Worksheet) -> gspread.Worksheet:
+    """The 'visits' tab of the same spreadsheet as `ws`, created (with its
+    header) if missing and header-checked like the offers tab."""
+    sh = ws.spreadsheet
+    try:
+        visits = _with_retry(sh.worksheet, VISITS_WORKSHEET_NAME)
+    except WorksheetNotFound:
+        visits = _with_retry(
+            sh.add_worksheet, title=VISITS_WORKSHEET_NAME, rows=1000, cols=len(VISIT_HEADER)
+        )
+    _ensure_header(visits, VISIT_HEADER)
+    return visits
+
+
+def load_existing_event_keys(ws: gspread.Worksheet, header: list[str] = HEADER) -> dict[str, int]:
     """Returns {event_key: row_number} for every row already in the sheet
     (row_number is 1-indexed, including the header row).
     """
     values = _with_retry(ws.get_all_values)
     if not values:
         return {}
-    key_col = HEADER.index("event_key")
+    key_col = header.index("event_key")
     out = {}
     for i, row in enumerate(values[1:], start=2):
         if key_col < len(row) and row[key_col]:
@@ -204,25 +232,31 @@ def load_existing_event_keys(ws: gspread.Worksheet) -> dict[str, int]:
     return out
 
 
-def latest_tweet_date(ws: gspread.Worksheet) -> str | None:
+def latest_tweet_date(ws: gspread.Worksheet, header: list[str] = HEADER) -> str | None:
     values = _with_retry(ws.get_all_values)
     if len(values) <= 1:
         return None
-    date_col = HEADER.index("tweet_date")
+    date_col = header.index("tweet_date")
     dates = [row[date_col] for row in values[1:] if date_col < len(row) and row[date_col]]
     return max(dates) if dates else None
 
 
-def sync_records(ws: gspread.Worksheet, records: list[OfferRecord]) -> tuple[int, int]:
+def sync_records(
+    ws: gspread.Worksheet, records: list[OfferRecord] | list[VisitRecord], header: list[str] = HEADER
+) -> tuple[int, int]:
     """Appends brand-new events, and folds a new source into `also_reported_by`
-    for events that already exist. Returns (appended_count, updated_count).
+    for events that already exist (and turns an upcoming visit completed
+    when its thank-you post arrives). Returns (appended_count, updated_count).
+    `header` is the tab's schema (VISIT_HEADER for the visits tab).
     """
-    existing = load_existing_event_keys(ws)
-    also_col_idx = HEADER.index("also_reported_by") + 1  # gspread cols are 1-indexed
-    source_handle_col_idx = HEADER.index("source_handle")
+    existing = load_existing_event_keys(ws, header)
+    also_col_idx = header.index("also_reported_by") + 1  # gspread cols are 1-indexed
+    source_handle_col_idx = header.index("source_handle")
+    status_col_idx = header.index("visit_status") + 1 if "visit_status" in header else None
+    notes_col_idx = header.index("notes") + 1
 
     to_append = []
-    also_updates: list[dict] = []  # {"range": "H5", "values": [["a, b"]]}
+    also_updates: list[dict] = []  # {"range": "H5", "values": [["a, b"]]}; visit status upgrades too
     updated = 0
     for record in records:
         key = canonical_key(record.event_key, existing.keys())
@@ -246,6 +280,16 @@ def sync_records(ws: gspread.Worksheet, records: list[OfferRecord]) -> tuple[int
                     a1 = gspread.utils.rowcol_to_a1(row_num, also_col_idx)
                     also_updates.append({"range": a1, "values": [[new_also]]})
                     updated += 1
+            if status_col_idx and _completes_upcoming(record, current_row, status_col_idx):
+                current_notes = current_row[notes_col_idx - 1] if len(current_row) >= notes_col_idx else ""
+                also_updates += [
+                    {"range": gspread.utils.rowcol_to_a1(row_num, status_col_idx), "values": [["completed"]]},
+                    {
+                        "range": gspread.utils.rowcol_to_a1(row_num, notes_col_idx),
+                        "values": [[add_completed_note(current_notes, record.tweet_url)]],
+                    },
+                ]
+                updated += 1
 
     if also_updates:
         _with_retry(ws.batch_update, also_updates, value_input_option="RAW")
@@ -253,6 +297,13 @@ def sync_records(ws: gspread.Worksheet, records: list[OfferRecord]) -> tuple[int
     if to_append:
         append_at_column_a(ws, to_append)
     return len(to_append), updated
+
+
+def _completes_upcoming(record, current_row: list[str], status_col_idx: int) -> bool:
+    """True if `record` is a completed visit for a row still marked upcoming
+    (a blank status is an older row, so already completed)."""
+    current = current_row[status_col_idx - 1] if len(current_row) >= status_col_idx else ""
+    return getattr(record, "visit_status", "") == "completed" and current == "upcoming"
 
 
 def append_at_column_a(ws: gspread.Worksheet, rows: list[list[str]]) -> int:

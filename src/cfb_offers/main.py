@@ -1,5 +1,6 @@
-"""CLI entry point: scrapes X for offer/commit/decommit tweets and writes
-them to the configured Google Sheet (or a local CSV with --dry-run).
+"""CLI entry point: scrapes X for offer/commit/decommit tweets (and completed
+recruit visits, for the 'visits' tab) and writes them to the configured
+Google Sheet (or a local CSV with --dry-run).
 
 Never logs tweet text or player info — this repo is public. Only counts.
 """
@@ -24,9 +25,15 @@ from cfb_offers.client import (
 )
 from cfb_offers.config import School, env, load_schools
 from cfb_offers.dedupe import add_source, canonicalize, dedupe_events, make_event_key
-from cfb_offers.models import OfferRecord
+from cfb_offers.models import OfferRecord, VisitRecord
 from cfb_offers.profile import parse_bio
-from cfb_offers.queries import backfill_slices, build_all_queries, build_slice_queries
+from cfb_offers.queries import (
+    VISIT_PHRASE_CLAUSE,
+    backfill_slices,
+    build_all_queries,
+    build_slice_queries,
+    build_visit_queries,
+)
 
 BLANK_PROFILE = {
     "name": "", "handle": "", "class_year": "", "position": "", "height": "",
@@ -72,6 +79,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             'search only these schools, comma-separated (e.g. "Auburn,Ole Miss"); '
             "classification still considers every school"
         ),
+    )
+    only = p.add_mutually_exclusive_group()
+    only.add_argument(
+        "--visits-only",
+        action="store_true",
+        help=(
+            "search only the visit queries and write only the 'visits' tab; the "
+            "lookback window comes from the 'visits' tab's newest tweet"
+        ),
+    )
+    only.add_argument(
+        "--offers-only",
+        action="store_true",
+        help="search only the offer/commit/decommit queries and write only the 'offers' tab",
     )
     p.add_argument(
         "--resume-from-slice",
@@ -224,13 +245,15 @@ async def process_tweet(
     schools_cfg: list[School],
     school_handles: list[str],
     resolve_profile,
-) -> tuple[str, list[OfferRecord], dict | None]:
+) -> tuple[str, list[OfferRecord | VisitRecord], dict | None]:
     """The classification + record-building pipeline for one tweet, shared
     by the live run and --from-raw replay (only `resolve_profile` differs
     between them - a network lookup live, a lookup into recorded data
     offline).
 
-    Returns (status, records, player_profile). status is one of
+    Returns (status, records, player_profile). records are OfferRecords,
+    or VisitRecords for a completed visit (a tweet is never both - see
+    classify.classify_visit). status is one of
     "school_account", "unclassified", "noise", "ok" - used for the
     tweets_seen/dropped counters and for what --dump-raw records.
     player_profile is the resolved player info (for --dump-raw), or None
@@ -251,7 +274,8 @@ async def process_tweet(
         return "unclassified", [], None
 
     events = classify.classify_tweet(text, schools_cfg, bio=author_desc)
-    if not events:
+    visits = [] if events else classify.classify_visit(text, schools_cfg, bio=author_desc)
+    if not events and not visits:
         return "noise", [], None
 
     if author_type == "player":
@@ -266,7 +290,24 @@ async def process_tweet(
             # not an announcement - never worth a row.
             return "noise", [], player_profile
 
-    records = []
+    shared = dict(
+        player_name=player_profile["name"],
+        player_handle=player_profile["handle"],
+        class_year=player_profile["class_year"],
+        position=player_profile["position"],
+        height=player_profile["height"],
+        weight=player_profile["weight"],
+        high_school=player_profile["high_school"],
+        state=player_profile["state"],
+        source_type=author_type,
+        source_handle=handle,
+        tweet_id=tweet_id,
+        tweet_date=tweet_date,
+        tweet_url=tweet_url,
+        tweet_text=text,
+        scraped_at=dt.datetime.now(dt.timezone.utc).isoformat(),
+    )
+    records: list[OfferRecord | VisitRecord] = []
     for ev in events:
         key = make_event_key(player_profile["handle"], player_profile["name"], ev.school, ev.event_type)
         records.append(
@@ -275,25 +316,40 @@ async def process_tweet(
                 event_type=ev.event_type,
                 is_flip=ev.is_flip,
                 school=ev.school,
-                player_name=player_profile["name"],
-                player_handle=player_profile["handle"],
-                class_year=player_profile["class_year"],
-                position=player_profile["position"],
-                height=player_profile["height"],
-                weight=player_profile["weight"],
-                high_school=player_profile["high_school"],
-                state=player_profile["state"],
-                source_type=author_type,
-                source_handle=handle,
-                tweet_id=tweet_id,
-                tweet_date=tweet_date,
-                tweet_url=tweet_url,
-                tweet_text=text,
                 notes=ev.notes,
-                scraped_at=dt.datetime.now(dt.timezone.utc).isoformat(),
+                **shared,
             )
         )
+    for v in visits:
+        key = make_event_key(player_profile["handle"], player_profile["name"], v.school, "visit")
+        records.append(
+            VisitRecord(event_key=key, visit_type=v.visit_type, school=v.school, visit_status=v.status, **shared)
+        )
     return "ok", records, player_profile
+
+
+def split_records(
+    records: list[OfferRecord | VisitRecord],
+) -> tuple[list[OfferRecord], list[VisitRecord]]:
+    """(offer/commit/decommit records, visit records)."""
+    return (
+        [r for r in records if isinstance(r, OfferRecord)],
+        [r for r in records if isinstance(r, VisitRecord)],
+    )
+
+
+def visits_csv_path(out: str) -> str:
+    """Where --dry-run/--from-raw write visits: next to --out, "_visits" added."""
+    stem, dot, ext = out.rpartition(".")
+    return f"{stem}_visits.{ext}" if dot else f"{out}_visits"
+
+
+def _write_csv(path: str, columns: list[str], records) -> None:
+    with open(path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(columns)
+        for r in records:
+            writer.writerow(r.as_row())
 
 
 def _write_jsonl(path: str, rows: list[dict]) -> None:
@@ -341,20 +397,31 @@ def select_schools(schools_cfg: list[School], only: str | None) -> list[School]:
 
 
 def search_plan(
-    schools_cfg: list[School], since_days: int, backfill_days: int | None, resume_from_slice: int = 1
+    schools_cfg: list[School],
+    since_days: int,
+    backfill_days: int | None,
+    resume_from_slice: int = 1,
+    offers: bool = True,
+    visits: bool = True,
 ) -> list[tuple[str, str]]:
-    """The (progress_label, query) list for a run. A normal run is one query
-    per school group over the whole window (no labels). A --backfill-days
-    run is every group once per week, newest week first, labelled with
-    counts/dates only, so it can be resumed with --resume-from-slice."""
+    """The (progress_label, query) list for a run: the offer queries and/or
+    the visit queries. A normal run is one query per school group over the
+    whole window (no labels). A --backfill-days run is every group once per
+    week, newest week first, labelled with counts/dates only, so it can be
+    resumed with --resume-from-slice."""
     if not backfill_days:
-        return [("", q) for q in build_all_queries(schools_cfg, since_days)]
+        queries = build_all_queries(schools_cfg, since_days) if offers else []
+        if visits:
+            queries += build_visit_queries(schools_cfg, since_days)
+        return [("", q) for q in queries]
     slices = backfill_slices(backfill_days)
     plan = []
     for k, (since, until) in enumerate(slices, start=1):
         if k < resume_from_slice:
             continue
-        queries = build_slice_queries(schools_cfg, since, until)
+        queries = build_slice_queries(schools_cfg, since, until) if offers else []
+        if visits:
+            queries += build_slice_queries(schools_cfg, since, until, VISIT_PHRASE_CLAUSE)
         for j, q in enumerate(queries, start=1):
             label = f"slice {k}/{len(slices)} ({since}..{until}) query {j}/{len(queries)}"
             plan.append((label, q))
@@ -492,6 +559,7 @@ async def _prune_sheet(args: argparse.Namespace) -> list[OfferRecord]:
     )
     sheet_rows = sheets.read_rows(ws)
     replayed, *_ = await _replay(raw_tweets, schools_cfg, school_handles)
+    replayed, _visits = split_records(replayed)  # the visits tab isn't pruned
     plan = plan_resync(sheet_rows, replayed, known_ids)
 
     rejected = sum(1 for *_, reason in plan.prune if reason.startswith("rejected"))
@@ -532,18 +600,16 @@ async def _run_from_raw(args: argparse.Namespace) -> list[OfferRecord]:
         raw_tweets, schools_cfg, school_handles
     )
 
-    records = dedupe_events(records)
+    records, visit_records = (dedupe_events(rs) for rs in split_records(records))
 
-    with open(args.out, "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(OfferRecord.columns())
-        for r in records:
-            writer.writerow(r.as_row())
+    _write_csv(args.out, OfferRecord.columns(), records)
+    _write_csv(visits_csv_path(args.out), VisitRecord.columns(), visit_records)
 
     print(
         f"from_raw={args.from_raw} tweets_seen={tweets_seen} "
         f"noise_dropped={tweets_dropped_noise} "
-        f"unclassified_dropped={tweets_dropped_unclassified} events={len(records)}",
+        f"unclassified_dropped={tweets_dropped_unclassified} events={len(records)} "
+        f"visits={len(visit_records)}",
         file=sys.stderr,
     )
     return records
@@ -587,7 +653,15 @@ async def run(argv: list[str] | None = None) -> list[OfferRecord]:
         sa_json = env("GOOGLE_SERVICE_ACCOUNT_JSON", required=True)
         sheet_id = env("SHEET_ID", required=True)
         ws = sheets.open_sheet(sa_json, sheet_id)
-        latest = None if args.since_days is not None else sheets.latest_tweet_date(ws)
+        visits_ws = sheets.visits_worksheet(ws)
+        # The window starts from the newest tweet in the tab this run writes,
+        # so offers and visits can run on separate schedules.
+        if args.since_days is not None:
+            latest = None
+        elif args.visits_only:
+            latest = sheets.latest_tweet_date(visits_ws, sheets.VISIT_HEADER)
+        else:
+            latest = sheets.latest_tweet_date(ws)
         since_days, is_backfill, warning = resolve_window(
             explicit_since_days=args.since_days,
             backfill_flag=args.backfill,
@@ -618,11 +692,16 @@ async def run(argv: list[str] | None = None) -> list[OfferRecord]:
     )
     limit = search_limit(max_pages)
     search_schools = select_schools(schools_cfg, args.only_schools)
-    plan = search_plan(search_schools, since_days, args.backfill_days, args.resume_from_slice)
+    plan = search_plan(
+        search_schools, since_days, args.backfill_days, args.resume_from_slice,
+        offers=not args.visits_only,
+        visits=not args.offers_only,
+    )
 
     api = await build_api(cookies_text)
     profile_cache: dict[str, dict] = {}
     records: list[OfferRecord] = []
+    visit_records: list[VisitRecord] = []
     tweets_seen = 0
     tweets_dropped_noise = 0
     tweets_dropped_unclassified = 0
@@ -632,6 +711,7 @@ async def run(argv: list[str] | None = None) -> list[OfferRecord]:
     # (and counted) twice.
     seen_ids: set[str] = set()
     appended_total = updated_total = 0
+    visits_appended_total = visits_updated_total = 0
     if args.dump_raw and args.resume_from_slice <= 1:
         open(args.dump_raw, "w").close()  # truncate; rows are appended per query
 
@@ -647,7 +727,7 @@ async def run(argv: list[str] | None = None) -> list[OfferRecord]:
                 seen_ids.add(tweet.id_str)
                 batch.append(tweet)
 
-        batch_records: list[OfferRecord] = []
+        batch_records: list[OfferRecord | VisitRecord] = []
         dump_rows: list[dict] = []
         for tweet in batch:
             author = tweet.user
@@ -699,14 +779,26 @@ async def run(argv: list[str] | None = None) -> list[OfferRecord]:
 
         if args.dump_raw and dump_rows:
             _append_jsonl(args.dump_raw, dump_rows)
-        records.extend(batch_records)
+        batch_offers, batch_visits = split_records(batch_records)
+        if args.visits_only:
+            batch_offers = []
+        if args.offers_only:
+            batch_visits = []
+        records.extend(batch_offers)
+        visit_records.extend(batch_visits)
         # sync_records dedupes against rows already in the sheet (including
         # ones written by earlier queries in this run), so per-query syncs
         # never duplicate an event.
-        if ws is not None and batch_records:
-            appended, updated = sheets.sync_records(ws, dedupe_events(batch_records))
+        if ws is not None and batch_offers:
+            appended, updated = sheets.sync_records(ws, dedupe_events(batch_offers))
             appended_total += appended
             updated_total += updated
+        if ws is not None and batch_visits:
+            appended, updated = sheets.sync_records(
+                visits_ws, dedupe_events(batch_visits), sheets.VISIT_HEADER
+            )
+            visits_appended_total += appended
+            visits_updated_total += updated
         await jitter()
 
     # Stale cookies fail an individual request silently (twscrape just marks
@@ -715,20 +807,22 @@ async def run(argv: list[str] | None = None) -> list[OfferRecord]:
     await require_active_accounts(api.pool)
 
     records = dedupe_events(records)
+    visit_records = dedupe_events(visit_records)
 
     if args.dry_run:
-        with open(args.out, "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(OfferRecord.columns())
-            for r in records:
-                writer.writerow(r.as_row())
+        _write_csv(args.out, OfferRecord.columns(), records)
+        _write_csv(visits_csv_path(args.out), VisitRecord.columns(), visit_records)
     else:
-        print(f"appended={appended_total} updated={updated_total}")
+        print(
+            f"appended={appended_total} updated={updated_total} "
+            f"visits_appended={visits_appended_total} visits_updated={visits_updated_total}"
+        )
 
     # counts only — never tweet text or player info (public repo / Actions log).
     print(
         f"tweets_seen={tweets_seen} noise_dropped={tweets_dropped_noise} "
-        f"unclassified_dropped={tweets_dropped_unclassified} events={len(records)}",
+        f"unclassified_dropped={tweets_dropped_unclassified} events={len(records)} "
+        f"visits={len(visit_records)}",
         file=sys.stderr,
     )
     return records

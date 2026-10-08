@@ -95,9 +95,23 @@ def test_at_alias_mention_matches_school(schools):
     assert [(e.school, e.event_type) for e in ev] == [("Michigan", "offer")]
 
 
+def test_university_account_aliases_match_their_school(schools):
+    # Every school's main university account is an alias like @UMich, so a
+    # post tagging only that account still names the school.
+    for handle, school in [
+        ("universityofga", "Georgia"),
+        ("UF", "Florida"),
+        ("UTAustin", "Texas"),
+        ("GeorgiaTech", "Georgia Tech"),
+    ]:
+        text = f"Blessed to receive an offer from @{handle}!! @FakeHS_Football"
+        assert match_schools(text, schools) == [school], handle
+
+
 def test_at_alias_is_not_a_school_account(schools):
     # Aliases name the school; only `handles` are the school's own accounts.
     assert not is_school_account("UMich", schools)
+    assert not is_school_account("universityofga", schools)
 
 
 # ---------------------------------------------------------------------------

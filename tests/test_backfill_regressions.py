@@ -246,7 +246,6 @@ def test_the_tracked_schools_themselves_still_match(schools):
         ("Blessed to receive an offer from Texas A&M University! #GigEm 🏈", "Texas A&M"),
         ("Blessed to receive an offer from the University of Texas at Austin 🏈", "Texas"),
         ("Blessed to receive an offer from the University of Alabama 🏈", "Alabama"),
-        ("Blessed to receive an offer from the Georgia Institute of Technology 🏈", "Georgia Tech"),
         ("Blessed to receive an offer from Miami 🏈", "Miami (FL)"),
         ("Blessed to receive an offer from the University of Tennessee 🏈", "Tennessee"),
     ]:

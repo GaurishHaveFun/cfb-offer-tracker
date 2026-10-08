@@ -7,7 +7,7 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 
-from cfb_offers.models import OfferRecord
+from cfb_offers.models import OfferRecord, VisitRecord
 
 
 def normalize_name(name: str) -> str:
@@ -34,6 +34,14 @@ def add_source(also_reported_by: str, new_handle: str) -> str:
     if new_handle not in existing:
         existing.append(new_handle)
     return ", ".join(existing)
+
+
+def add_completed_note(notes: str, tweet_url: str) -> str:
+    """Records the thank-you post that turned an upcoming visit completed."""
+    note = f"completed: {tweet_url}"
+    if note in notes:
+        return notes
+    return f"{notes}; {note}" if notes else note
 
 
 def _alnum(text: str) -> str:
@@ -76,6 +84,8 @@ def dedupe_events(records: list[OfferRecord]) -> list[OfferRecord]:
     """One row per event: the earliest tweet is kept as the row, and every
     other source's handle is folded into `also_reported_by`. A reporter's
     name-only report and the player's own post merge (see canonical_key).
+    An upcoming visit with a later completed post turns completed, with
+    that post's URL in `notes`.
     """
     groups: dict[str, list[OfferRecord]] = {}
     for r in canonicalize(records):
@@ -89,5 +99,13 @@ def dedupe_events(records: list[OfferRecord]) -> list[OfferRecord]:
         for other in group[1:]:
             if other.source_handle and other.source_handle != main.source_handle:
                 also = add_source(also, other.source_handle)
-        result.append(replace(main, also_reported_by=also) if also != main.also_reported_by else main)
+        if also != main.also_reported_by:
+            main = replace(main, also_reported_by=also)
+        if isinstance(main, VisitRecord) and main.visit_status == "upcoming":
+            done = next((r for r in group if r.visit_status == "completed"), None)
+            if done is not None:
+                main = replace(
+                    main, visit_status="completed", notes=add_completed_note(main.notes, done.tweet_url)
+                )
+        result.append(main)
     return result
