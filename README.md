@@ -150,9 +150,29 @@ This creates one tab per position group (QB, RB, WR, TE, OL, DL, LB, DB, ATH,
 K/P), a `Blank` tab for rows with no position, and a `7 states` tab for
 players from GA, NC, SC, TN, AL, FL and VA. Each is a live `FILTER` formula
 over `offers`, so it updates instantly as rows are added or pruned. A player
-listing several positions (e.g. `WR/DB`) appears on each matching tab. Don't
-edit these tabs by hand; edit `offers` instead. Re-running `--setup-tabs` is
-safe.
+listing several positions (e.g. `WR/DB`) appears on each matching tab, and
+each tab lists the newest tweets first. Don't edit these tabs by hand; edit
+`offers` instead. Re-running `--setup-tabs` is safe.
+
+`--setup-tabs` also styles the sheet (formatting only, never data or column
+order):
+
+- a `Home` tab with a link and live row count for every tab, a color legend
+  and tips (rebuilt on each run, so don't type in it)
+- tabs ordered and colored by group: `offers` navy, `visits` teal, offense
+  blue, defense red, athletes purple, special teams green, `7 states` orange,
+  `pruned` gray and last
+- friendly header labels (`Player Name`, `Tweet URL`), a colored header row
+  and alternating row colors
+- commit rows highlighted green, decommits red, flips in bold orange; on
+  `visits`, upcoming visits yellow and official visits bold
+- column widths set; `event_key`, `tweet_id` and `scraped_at` hidden (not
+  removed - unhide them from the column menu)
+- a `Newest first` filter view on `offers` and `visits` (Data > Filter views), which sorts
+  for you without reordering the rows the scraper reads
+
+Each run replaces the banding and conditional formatting on these tabs, so
+put any of your own on a separate tab.
 
 ### Visits tab
 
