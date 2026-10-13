@@ -162,8 +162,9 @@ order):
 - tabs ordered and colored by group: `offers` navy, `visits` teal, offense
   blue, defense red, athletes purple, special teams green, `7 states` orange,
   `pruned` gray and last
-- friendly header labels (`Player Name`, `Tweet URL`), a colored header row
-  and alternating row colors
+- friendly header labels (`Player Name`, `Tweet URL`) on headers still
+  showing the raw column name (labels you've renamed, like `HS`, are kept),
+  a colored header row and alternating row colors
 - commit rows highlighted green, decommits red, flips in bold orange; on
   `visits`, upcoming visits yellow and official visits bold
 - column widths set; `event_key`, `tweet_id` and `scraped_at` hidden (not
@@ -171,8 +172,10 @@ order):
 - a `Newest first` filter view on `offers` and `visits` (Data > Filter views), which sorts
   for you without reordering the rows the scraper reads
 
-Each run replaces the banding and conditional formatting on these tabs, so
-put any of your own on a separate tab.
+Before relabeling a header, each run checks the columns are still in order
+and stops with an error if any were moved. Each run replaces the alternating
+row colors and its own highlight rules on these tabs; conditional formatting
+you add yourself is kept.
 
 ### Visits tab
 

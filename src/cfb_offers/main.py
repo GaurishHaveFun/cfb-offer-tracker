@@ -213,6 +213,20 @@ def _all_school_handles(schools_cfg: list[School]) -> list[str]:
     return [h for s in schools_cfg for h in s.mention_handles]
 
 
+def normalize_tweet_date(value: str) -> str:
+    """Any ISO timestamp ("...Z", "...+00:00", another offset) as UTC
+    "YYYY-MM-DDTHH:MM:SS+00:00", so tweet_date strings sort as dates (the
+    view tabs and latest_tweet_date compare them as text). Anything that
+    doesn't parse is kept as-is."""
+    try:
+        parsed = dt.datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return value
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.astimezone(dt.timezone.utc).isoformat()
+
+
 async def _resolve_player_profile(api, cache: dict, handle: str, name: str) -> dict:
     """Returns {name, handle, class_year, position, height, weight, high_school, state}."""
     if not handle:
@@ -302,7 +316,7 @@ async def process_tweet(
         source_type=author_type,
         source_handle=handle,
         tweet_id=tweet_id,
-        tweet_date=tweet_date,
+        tweet_date=normalize_tweet_date(tweet_date),
         tweet_url=tweet_url,
         tweet_text=text,
         scraped_at=dt.datetime.now(dt.timezone.utc).isoformat(),

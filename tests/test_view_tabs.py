@@ -142,18 +142,26 @@ def test_tabs_are_ordered_and_colored_by_group():
     moves = [r["updateSheetProperties"]["properties"] for r in reqs
              if "index" in r.get("updateSheetProperties", {}).get("properties", {})]
     ids = {s["properties"]["sheetId"]: s["properties"]["title"] for s in meta["sheets"]}
-    assert [ids[m["sheetId"]] for m in moves] == ["Home", "offers", "QB", "DL", "pruned"]
-    assert [m["index"] for m in moves] == [0, 1, 2, 3, 4]
-    color = {ids[m["sheetId"]]: m["tabColorStyle"]["rgbColor"] for m in moves}
+    # the user's own tab goes after ours, and pruned is always last
+    assert [ids[m["sheetId"]] for m in moves] == ["Home", "offers", "QB", "DL", "My notes", "pruned"]
+    assert [m["index"] for m in moves] == [0, 1, 2, 3, 4, 5]
+    color = {ids[m["sheetId"]]: m["tabColorStyle"]["rgbColor"] for m in moves if "tabColorStyle" in m}
     assert color["QB"] != color["DL"]
-    # a tab the user made is left alone
-    assert "'sheetId': 103" not in str(reqs)  # "My notes"
+    # a tab the user made is only moved, never colored or formatted
+    assert "My notes" not in color
+    assert [r for r in reqs if "'sheetId': 103" in str(r)] == [
+        {"updateSheetProperties": {"properties": {"sheetId": 103, "index": 4}, "fields": "index"}}
+    ]
+
+
+def _cf(formula):
+    return {"booleanRule": {"condition": {"type": "CUSTOM_FORMULA", "values": [{"userEnteredValue": formula}]}}}
 
 
 def test_rerun_replaces_instead_of_stacking():
     meta = _meta("offers", extras={"offers": {
         "bandedRanges": [{"bandedRangeId": 5}],
-        "conditionalFormats": [{}, {}, {}],
+        "conditionalFormats": [_cf(f) for f in ('=$B2="commit"', '=$B2="decommit"', '=$C2="True"')],
         "filterViews": [{"filterViewId": 9, "title": "Newest first"}, {"filterViewId": 10, "title": "Mine"}],
     }})
     reqs = sheets.style_requests(meta, sheets.home_rows({})[1])
@@ -215,3 +223,94 @@ def test_home_legend_covers_visits():
     rows, marks = sheets.home_rows({"visits": 3})
     assert {"Upcoming", "Official"} <= set(marks["legend"])
     assert ['=HYPERLINK("#gid=3", "visits")'] == [r[0] for r in rows if r and "visits\")" in r[0]]
+
+
+def test_rerun_keeps_the_users_own_highlight_rules():
+    mine = _cf('=$D2="Alabama"')
+    meta = _meta("offers", extras={"offers": {
+        "conditionalFormats": [_cf('=$B2="commit"'), mine, _cf('=$C2="True"'), {"gradientRule": {}}],
+    }})
+    reqs = sheets.style_requests(meta, sheets.home_rows({})[1])
+    # only ours (indexes 0 and 2) go, bottom-up so the indexes stay valid
+    assert [r["deleteConditionalFormatRule"]["index"] for r in reqs if "deleteConditionalFormatRule" in r] == [2, 0]
+
+
+def test_old_narrow_visits_tab_is_widened_before_styling():
+    meta = _meta("visits", extras={})
+    meta["sheets"][0]["properties"]["gridProperties"] = {"columnCount": len(sheets.VISIT_HEADER) - 1}
+    reqs = sheets.style_requests(meta, sheets.home_rows({})[1])
+    kinds = [next(iter(r)) for r in reqs]
+    assert reqs[kinds.index("appendDimension")]["appendDimension"] == {
+        "sheetId": 100, "dimension": "COLUMNS", "length": 1}
+    assert kinds.index("appendDimension") < kinds.index("addBanding")
+    wide = sheets.style_requests(_meta("visits"), sheets.home_rows({})[1])
+    assert not any("appendDimension" in r for r in wide)
+
+
+def test_header_labels_keep_renamed_cells():
+    found = list(sheets.HEADER)
+    found[sheets.HEADER.index("high_school")] = "HS"
+    found[sheets.HEADER.index("player_name")] = "Player Name"
+    found[sheets.HEADER.index("notes")] = ""
+    updates = sheets.header_label_updates("offers", found)
+    by_range = {u["range"]: u["values"][0][0] for u in updates}
+    assert "HS" not in by_range.values() and "High School" not in by_range.values()
+    assert f"'offers'!{sheets._col('notes')}1" in by_range  # blank gets filled
+    assert by_range[f"'offers'!{sheets._col('tweet_url')}1"] == "Tweet URL"
+    # already labeled: nothing to write
+    labels = [sheets.display_label(c) for c in sheets.HEADER]
+    assert sheets.header_label_updates("offers", labels) == []
+
+
+class FakeStyleSheet:
+    """Just enough of gspread.Spreadsheet for style_sheet."""
+
+    def __init__(self, headers):
+        self.headers, self.writes, self.batches = headers, [], []
+
+    def fetch_sheet_metadata(self):
+        return _meta(*self.headers)
+
+    def values_batch_get(self, ranges):
+        return {"valueRanges": [{"values": [self.headers[r.split("'")[1]]]} for r in ranges]}
+
+    def values_batch_update(self, body):
+        self.writes.append(body)
+
+    def batch_update(self, body):
+        self.batches.append(body)
+
+
+def test_style_sheet_refuses_to_relabel_moved_columns():
+    import pytest
+    moved = list(sheets.VISIT_HEADER)
+    moved[0], moved[1] = moved[1], moved[0]
+    sh = FakeStyleSheet({"offers": list(sheets.HEADER), "visits": moved})
+    sh.worksheet = lambda title: FakeHealTab(moved, title)
+    with pytest.raises(sheets.SheetSchemaError):
+        sheets.style_sheet(FakeOffers(sh))
+    assert sh.writes == [] and sh.batches == []
+
+
+class FakeHealTab:
+    def __init__(self, header, title):
+        self.header, self.title = header, title
+
+    def get_all_values(self):
+        return [self.header]
+
+
+def test_tweet_dates_are_stored_as_utc_iso():
+    from cfb_offers.main import normalize_tweet_date
+    assert normalize_tweet_date("2026-10-12T13:03:11Z") == "2026-10-12T13:03:11+00:00"
+    assert normalize_tweet_date("2026-10-12T09:03:11-04:00") == "2026-10-12T13:03:11+00:00"
+    assert normalize_tweet_date("2026-10-12T13:03:11+00:00") == "2026-10-12T13:03:11+00:00"
+    assert normalize_tweet_date("not a date") == "not a date"
+
+
+def test_home_legend_matches_the_highlight_rules():
+    reqs = sheets.style_requests(_meta("offers", "visits"), sheets.home_rows({})[1])
+    rules = [r["addConditionalFormatRule"]["rule"]["booleanRule"]["format"] for r in reqs
+             if "addConditionalFormatRule" in r]
+    assert all(any(fmt == h[5] for h in sheets.HIGHLIGHTS) for fmt in rules)
+    assert set(sheets.home_rows({})[1]["legend"]) == {h[0] for h in sheets.HIGHLIGHTS}
