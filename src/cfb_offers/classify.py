@@ -211,6 +211,54 @@ def is_school_account(handle: str, schools: list[School]) -> bool:
     return any(handle == h.lstrip("@").lower() for s in schools for h in s.handles)
 
 
+def is_profilefblive_roundup_account(handle: str) -> bool:
+    """True for the multi-player offer-roundup account we specifically support."""
+    return handle.lstrip("@").lower() == "profilefblive"
+
+
+_PROFILEFBLIVE_PLAYER_RE = re.compile(
+    r"(?P<rating>\d+(?:\.\d+)?)\s*⭐\s*"
+    r"(?P<year>20\d{2})\s+"
+    r"(?P<position>[A-Z]{2,5}(?:/[A-Z]{2,5})?)\s+"
+    r"(?P<name>[A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+)*(?:\s+Jr\.)?)\s+"
+    r"@(?P<handle>\w+)",
+    re.IGNORECASE,
+)
+
+
+def iter_profilefblive_players(text: str, schools: list[School]) -> list[dict[str, str]]:
+    """Returns one record per recruit in a profilefblive roundup.
+
+    Example chunk: "4.8⭐ 2029 ATH Jaedon White @lighting_white3"
+    """
+    text = html.unescape(text or "")
+    matched = match_schools(text, schools)
+    if not matched:
+        return []
+    school = matched[0]
+    players: list[dict[str, str]] = []
+    for match in _PROFILEFBLIVE_PLAYER_RE.finditer(text):
+        players.append(
+            {
+                "school": school,
+                "class_year": match.group("year"),
+                "position": match.group("position").upper(),
+                "name": match.group("name").strip(),
+                "handle": match.group("handle").lstrip("@"),
+                "event_type": "offer",
+            }
+        )
+    return players
+
+
+def parse_profilefblive_roundup(text: str, schools: list[School]) -> list[ClassifiedEvent]:
+    """Convenience wrapper returning the same event objects used elsewhere."""
+    return [
+        ClassifiedEvent(event_type="offer", is_flip=False, school=player["school"])
+        for player in iter_profilefblive_players(text, schools)
+    ]
+
+
 def detect_event_type(text: str) -> tuple[str | None, bool]:
     """Returns (event_type, is_flip). Checked in order: decommit, commit, offer."""
     if _search_any(DECOMMIT_PATTERNS, text):
