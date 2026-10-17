@@ -276,6 +276,47 @@ async def process_tweet(
     if classify.is_school_account(handle, schools_cfg):
         return "school_account", [], None
 
+    if classify.is_profilefblive_roundup_account(handle):
+        entries = classify.iter_profilefblive_players(text, schools_cfg)
+        if entries:
+            records: list[OfferRecord | VisitRecord] = []
+            for entry in entries:
+                # Resolve the player profile the same way as a normal announcement,
+                # but with a handle already present in the roundup text.
+                player_profile = await resolve_profile(entry["handle"], entry["name"])
+                if not player_profile.get("handle") and not player_profile.get("name"):
+                    continue
+                shared = dict(
+                    player_name=player_profile["name"],
+                    player_handle=player_profile["handle"],
+                    class_year=player_profile["class_year"],
+                    position=player_profile["position"],
+                    height=player_profile["height"],
+                    weight=player_profile["weight"],
+                    high_school=player_profile["high_school"],
+                    state=player_profile["state"],
+                    source_type="reporter",
+                    source_handle=handle,
+                    tweet_id=tweet_id,
+                    tweet_date=tweet_date,
+                    tweet_url=tweet_url,
+                    tweet_text=text,
+                    scraped_at=dt.datetime.now(dt.timezone.utc).isoformat(),
+                )
+                records.append(
+                    OfferRecord(
+                        event_key=make_event_key(
+                            player_profile["handle"], player_profile["name"], entry["school"], "offer"
+                        ),
+                        event_type="offer",
+                        is_flip=False,
+                        school=entry["school"],
+                        notes="",
+                        **shared,
+                    )
+                )
+            return "ok", records, None
+
     # A configured coach handle is never eligible for the first-person
     # override below (a coach's own bio shouldn't get read as a player's).
     is_known_coach = sources.is_coach_handle(handle, schools_cfg)
