@@ -5,6 +5,7 @@ from cfb_offers.classify import (
     detect_event_type,
     is_noise,
     is_school_account,
+    iter_profilefblive_players,
     match_schools,
     parse_profilefblive_roundup,
 )
@@ -144,6 +145,16 @@ def test_profilefblive_roundup_processed_as_offer_rows(schools):
         assert {row.position for row in rows} == {"ATH", "LB"}
 
     asyncio.run(_run())
+
+
+def test_profilefblive_commit_roundup_not_parsed_as_offers(schools):
+    text = "Auburn has landed a commitment from 4.8⭐ 2029 ATH Jaedon White @lighting_white3 who committed to Auburn"
+    assert iter_profilefblive_players(text, schools) == []
+
+
+def test_profilefblive_ignores_lowercase_lookalikes(schools):
+    text = "Auburn has extended new scholarship offers 4.8⭐ 2029 ath jaedon white @lighting_white3"
+    assert iter_profilefblive_players(text, schools) == []
 
 
 def test_match_schools_no_match_returns_empty(schools):

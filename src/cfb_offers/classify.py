@@ -222,7 +222,6 @@ _PROFILEFBLIVE_PLAYER_RE = re.compile(
     r"(?P<position>[A-Z]{2,5}(?:/[A-Z]{2,5})?)\s+"
     r"(?P<name>[A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+)*(?:\s+Jr\.)?)\s+"
     r"@(?P<handle>\w+)",
-    re.IGNORECASE,
 )
 
 
@@ -232,8 +231,11 @@ def iter_profilefblive_players(text: str, schools: list[School]) -> list[dict[st
     Example chunk: "4.8⭐ 2029 ATH Jaedon White @lighting_white3"
     """
     text = html.unescape(text or "")
+    # Only offer roundups: a commit/decommit roundup must not become offer rows.
+    if detect_event_type(text)[0] in ("commit", "decommit") or not OFFER_WORD_RE.search(text):
+        return []
     matched = match_schools(text, schools)
-    if not matched:
+    if len(matched) != 1:
         return []
     school = matched[0]
     players: list[dict[str, str]] = []
